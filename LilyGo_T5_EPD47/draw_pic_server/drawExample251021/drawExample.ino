@@ -156,15 +156,18 @@ void epd_draw_text_advanced(const char *text, int x, int y, uint8_t textColor, u
 {
   if (fb && text && strlen(text) > 0)
   {
-    int char_width = 6;   // 5像素寬度 + 1像素間距
-    int char_height = 7;  // 7像素高度
-    int scale = fontSize; // 縮放倍數 (1-5)
+    int base_char_width = 6;   // 基礎字符寬度
+    int base_char_height = 8;  // 基礎字符高度
+    
+    // 計算實際字符尺寸（可以非常大）
+    int char_width = base_char_width * fontSize;
+    int char_height = base_char_height * fontSize;
+    
+    int text_width = strlen(text) * char_width;
+    int text_height = char_height;
 
-    int text_width = strlen(text) * char_width * scale;
-    int text_height = char_height * scale;
-
-    // 確保座標在有效範圍內
-    if (x >= 0 && y >= 0 && x + text_width < EPD_WIDTH && y + text_height < EPD_HEIGHT)
+    // 確保至少有部分文字在屏幕內
+    if (x < EPD_WIDTH && y < EPD_HEIGHT && x + text_width > 0 && y + text_height > 0)
     {
       // 繪製背景矩形
       if (bgColor != 255) // 255 表示透明背景
@@ -176,7 +179,7 @@ void epd_draw_text_advanced(const char *text, int x, int y, uint8_t textColor, u
       for (int i = 0; i < strlen(text); i++)
       {
         char c = text[i];
-        int char_x = x + i * char_width * scale;
+        int char_x = x + i * char_width;
 
         // 將小寫轉大寫
         if (c >= 'a' && c <= 'z')
@@ -184,19 +187,36 @@ void epd_draw_text_advanced(const char *text, int x, int y, uint8_t textColor, u
           c = c - 'a' + 'A';
         }
 
-        if (scale == 1)
+        // 繪製放大的字符
+        if (c >= 32 && c <= 90) // 有效字符範圍
         {
-          // 原始大小直接繪製
-          draw_char_5x7(char_x, y, c, textColor, fb);
-        }
-        else
-        {
-          // 放大繪製 - 繪製多個相同字符來模擬放大
-          for (int sx = 0; sx < scale; sx++)
+          int char_index = c - 32;
+          
+          // 遍歷字符點陣的每一列
+          for (int col = 0; col < 5; col++)
           {
-            for (int sy = 0; sy < scale; sy++)
+            uint8_t column = ascii_font_5x7[char_index][col];
+            
+            // 遍歷字符點陣的每一行
+            for (int row = 0; row < 7; row++)
             {
-              draw_char_5x7(char_x + sx, y + sy, c, textColor, fb);
+              if (column & (1 << row))
+              {
+                // 計算放大後的像素塊位置和大小
+                int block_x = char_x + col * fontSize;
+                int block_y = y + row * fontSize;
+                
+                // 繪製放大的像素塊（fontSize x fontSize 的矩形）
+                if (block_x >= 0 && block_y >= 0 && 
+                    block_x < EPD_WIDTH && block_y < EPD_HEIGHT)
+                {
+                  // 計算實際繪製尺寸（避免超出邊界）
+                  int block_width = min(fontSize, EPD_WIDTH - block_x);
+                  int block_height = min(fontSize, EPD_HEIGHT - block_y);
+                  
+                  epd_fill_rect(block_x, block_y, block_width, block_height, textColor, fb);
+                }
+              }
             }
           }
         }
@@ -207,7 +227,7 @@ void epd_draw_text_advanced(const char *text, int x, int y, uint8_t textColor, u
     }
     else
     {
-      Serial.printf("Text position out of bounds: (%d,%d) size:(%d,%d)\n", x, y, text_width, text_height);
+      Serial.printf("Text completely out of bounds: (%d,%d) size:(%d,%d)\n", x, y, text_width, text_height);
     }
   }
 }
@@ -254,7 +274,7 @@ void handleRoot()
     </div>
     <div class="form-row">
       <label>字體大小:</label>
-      <input type="range" id="fontSize" min="1" max="5" value="2" oninput="updateFontSizeValue()">
+      <input type="range" id="fontSize" min="1" max="100" value="2" oninput="updateFontSizeValue()">
       <span class="color-value" id="fontSizeValue">2</span>
     </div>
     <div class="form-row">
@@ -294,6 +314,101 @@ void handleRoot()
       <input type="number" id="lineHeight" min="10" max="100" value="25">
     </div>
     <button onclick="drawMultiText()">繪製多行文字</button>
+  </div>
+
+  <div class="text-control">
+    <h3>進階繪圖控制</h3>
+    
+    <h4>畫線控制</h4>
+    <div class="form-row">
+      <label>起點X:</label>
+      <input type="number" id="lineX1" min="0" max="%WIDTH%" value="50">
+      <label>起點Y:</label>
+      <input type="number" id="lineY1" min="0" max="%HEIGHT%" value="50">
+    </div>
+    <div class="form-row">
+      <label>終點X:</label>
+      <input type="number" id="lineX2" min="0" max="%WIDTH%" value="200">
+      <label>終點Y:</label>
+      <input type="number" id="lineY2" min="0" max="%HEIGHT%" value="100">
+    </div>
+    <div class="form-row">
+      <label>線條顏色:</label>
+      <input type="range" id="lineColor" min="0" max="15" value="0" oninput="updateLineColorValue()">
+      <span class="color-value" id="lineColorValue">0 (黑色)</span>
+    </div>
+    <div class="form-row">
+      <label>線條粗細:</label>
+      <input type="range" id="lineThickness" min="1" max="20" value="1" oninput="updateLineThicknessValue()">
+      <span class="color-value" id="lineThicknessValue">1</span>
+    </div>
+    <button onclick="drawLineAdvanced()">繪製線條</button>
+
+    <h4>畫圓控制</h4>
+    <div class="form-row">
+      <label>圓心X:</label>
+      <input type="number" id="circleX" min="0" max="%WIDTH%" value="200">
+      <label>圓心Y:</label>
+      <input type="number" id="circleY" min="0" max="%HEIGHT%" value="200">
+    </div>
+    <div class="form-row">
+      <label>半徑:</label>
+      <input type="number" id="circleRadius" min="1" max="500" value="50">
+    </div>
+    <div class="form-row">
+      <label>外框:</label>
+      <input type="checkbox" id="circleBorder" checked>
+      <label>外框顏色:</label>
+      <input type="range" id="circleBorderColor" min="0" max="15" value="0" oninput="updateCircleBorderColorValue()">
+      <span class="color-value" id="circleBorderColorValue">0 (黑色)</span>
+    </div>
+    <div class="form-row">
+      <label>外框粗細:</label>
+      <input type="range" id="circleBorderThickness" min="1" max="10" value="1" oninput="updateCircleBorderThicknessValue()">
+      <span class="color-value" id="circleBorderThicknessValue">1</span>
+    </div>
+    <div class="form-row">
+      <label>填滿:</label>
+      <input type="checkbox" id="circleFill">
+      <label>填充顏色:</label>
+      <input type="range" id="circleFillColor" min="0" max="15" value="15" oninput="updateCircleFillColorValue()">
+      <span class="color-value" id="circleFillColorValue">15 (白色)</span>
+    </div>
+    <button onclick="drawCircleAdvanced()">繪製圓形</button>
+
+    <h4>畫矩形控制</h4>
+    <div class="form-row">
+      <label>左上X:</label>
+      <input type="number" id="rectX" min="0" max="%WIDTH%" value="100">
+      <label>左上Y:</label>
+      <input type="number" id="rectY" min="0" max="%HEIGHT%" value="150">
+    </div>
+    <div class="form-row">
+      <label>寬度:</label>
+      <input type="number" id="rectWidth" min="1" max="%WIDTH%" value="100">
+      <label>高度:</label>
+      <input type="number" id="rectHeight" min="1" max="%HEIGHT%" value="80">
+    </div>
+    <div class="form-row">
+      <label>外框:</label>
+      <input type="checkbox" id="rectBorder" checked>
+      <label>外框顏色:</label>
+      <input type="range" id="rectBorderColor" min="0" max="15" value="0" oninput="updateRectBorderColorValue()">
+      <span class="color-value" id="rectBorderColorValue">0 (黑色)</span>
+    </div>
+    <div class="form-row">
+      <label>外框粗細:</label>
+      <input type="range" id="rectBorderThickness" min="1" max="10" value="1" oninput="updateRectBorderThicknessValue()">
+      <span class="color-value" id="rectBorderThicknessValue">1</span>
+    </div>
+    <div class="form-row">
+      <label>填滿:</label>
+      <input type="checkbox" id="rectFill">
+      <label>填充顏色:</label>
+      <input type="range" id="rectFillColor" min="0" max="15" value="15" oninput="updateRectFillColorValue()">
+      <span class="color-value" id="rectFillColorValue">15 (白色)</span>
+    </div>
+    <button onclick="drawRectAdvanced()">繪製矩形</button>
   </div>
 
   <div class="upload">
@@ -338,8 +453,60 @@ void handleRoot()
     
     function updateFontSizeValue() {
       const size = document.getElementById('fontSize').value;
-      const sizeNames = ['', '極小', '小', '中', '大', '極大'];
-      document.getElementById('fontSizeValue').textContent = size + ' (' + sizeNames[size] + ')';
+      document.getElementById('fontSizeValue').textContent = size + ' (像素倍數)';
+    }
+    
+    function updateLineColorValue() {
+      const color = document.getElementById('lineColor').value;
+      const colorName = getColorName(color);
+      document.getElementById('lineColorValue').textContent = color + ' (' + colorName + ')';
+    }
+    
+    function updateLineThicknessValue() {
+      const thickness = document.getElementById('lineThickness').value;
+      document.getElementById('lineThicknessValue').textContent = thickness + ' 像素';
+    }
+    
+    function updateCircleBorderColorValue() {
+      const color = document.getElementById('circleBorderColor').value;
+      const colorName = getColorName(color);
+      document.getElementById('circleBorderColorValue').textContent = color + ' (' + colorName + ')';
+    }
+    
+    function updateCircleBorderThicknessValue() {
+      const thickness = document.getElementById('circleBorderThickness').value;
+      document.getElementById('circleBorderThicknessValue').textContent = thickness + ' 像素';
+    }
+    
+    function updateCircleFillColorValue() {
+      const color = document.getElementById('circleFillColor').value;
+      const colorName = getColorName(color);
+      document.getElementById('circleFillColorValue').textContent = color + ' (' + colorName + ')';
+    }
+    
+    function updateRectBorderColorValue() {
+      const color = document.getElementById('rectBorderColor').value;
+      const colorName = getColorName(color);
+      document.getElementById('rectBorderColorValue').textContent = color + ' (' + colorName + ')';
+    }
+    
+    function updateRectBorderThicknessValue() {
+      const thickness = document.getElementById('rectBorderThickness').value;
+      document.getElementById('rectBorderThicknessValue').textContent = thickness + ' 像素';
+    }
+    
+    function updateRectFillColorValue() {
+      const color = document.getElementById('rectFillColor').value;
+      const colorName = getColorName(color);
+      document.getElementById('rectFillColorValue').textContent = color + ' (' + colorName + ')';
+    }
+    
+    function getColorName(color) {
+      if (color == 0) return '黑色';
+      else if (color <= 3) return '深灰';
+      else if (color <= 7) return '中灰';
+      else if (color <= 11) return '淺灰';
+      else return '白色';
     }
     
     function setStyle(styleName) {
@@ -430,10 +597,98 @@ void handleRoot()
         });
     }
     
+    function drawLineAdvanced() {
+      const x1 = document.getElementById('lineX1').value;
+      const y1 = document.getElementById('lineY1').value;
+      const x2 = document.getElementById('lineX2').value;
+      const y2 = document.getElementById('lineY2').value;
+      const color = document.getElementById('lineColor').value;
+      const thickness = document.getElementById('lineThickness').value;
+      
+      const url = '/draw/line/advanced?x1=' + x1 + '&y1=' + y1 + 
+                  '&x2=' + x2 + '&y2=' + y2 + 
+                  '&color=' + color + '&thickness=' + thickness;
+      
+      fetch(url)
+        .then(response => response.text())
+        .then(data => {
+          console.log(data);
+          alert('線條已繪製: ' + data);
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('繪製失敗');
+        });
+    }
+    
+    function drawCircleAdvanced() {
+      const centerX = document.getElementById('circleX').value;
+      const centerY = document.getElementById('circleY').value;
+      const radius = document.getElementById('circleRadius').value;
+      const hasBorder = document.getElementById('circleBorder').checked;
+      const borderColor = document.getElementById('circleBorderColor').value;
+      const borderThickness = document.getElementById('circleBorderThickness').value;
+      const isFilled = document.getElementById('circleFill').checked;
+      const fillColor = document.getElementById('circleFillColor').value;
+      
+      const url = '/draw/circle/advanced?centerX=' + centerX + '&centerY=' + centerY + 
+                  '&radius=' + radius + '&hasBorder=' + hasBorder + 
+                  '&borderColor=' + borderColor + '&borderThickness=' + borderThickness + 
+                  '&isFilled=' + isFilled + '&fillColor=' + fillColor;
+      
+      fetch(url)
+        .then(response => response.text())
+        .then(data => {
+          console.log(data);
+          alert('圓形已繪製: ' + data);
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('繪製失敗');
+        });
+    }
+    
+    function drawRectAdvanced() {
+      const x = document.getElementById('rectX').value;
+      const y = document.getElementById('rectY').value;
+      const width = document.getElementById('rectWidth').value;
+      const height = document.getElementById('rectHeight').value;
+      const hasBorder = document.getElementById('rectBorder').checked;
+      const borderColor = document.getElementById('rectBorderColor').value;
+      const borderThickness = document.getElementById('rectBorderThickness').value;
+      const isFilled = document.getElementById('rectFill').checked;
+      const fillColor = document.getElementById('rectFillColor').value;
+      
+      const url = '/draw/rect/advanced?x=' + x + '&y=' + y + 
+                  '&width=' + width + '&height=' + height + 
+                  '&hasBorder=' + hasBorder + '&borderColor=' + borderColor + 
+                  '&borderThickness=' + borderThickness + 
+                  '&isFilled=' + isFilled + '&fillColor=' + fillColor;
+      
+      fetch(url)
+        .then(response => response.text())
+        .then(data => {
+          console.log(data);
+          alert('矩形已繪製: ' + data);
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('繪製失敗');
+        });
+    }
+    
     // 初始化所有顯示值
     updateTextColorValue();
     updateBgColorValue();
     updateFontSizeValue();
+    updateLineColorValue();
+    updateLineThicknessValue();
+    updateCircleBorderColorValue();
+    updateCircleBorderThicknessValue();
+    updateCircleFillColorValue();
+    updateRectBorderColorValue();
+    updateRectBorderThicknessValue();
+    updateRectFillColorValue();
   </script>
 </body>
 </html>
@@ -494,6 +749,243 @@ void handleDrawCircle()
   server.send(200, "text/plain", "Circle drawn");
 }
 
+// ===== 進階畫線控制 =====
+void handleDrawLineAdvanced()
+{
+  if (!framebuffer)
+  {
+    server.send(400, "text/plain", "Framebuffer not available");
+    return;
+  }
+
+  // 獲取參數
+  int x1 = server.arg("x1").toInt();
+  int y1 = server.arg("y1").toInt();
+  int x2 = server.arg("x2").toInt();
+  int y2 = server.arg("y2").toInt();
+  int color = server.arg("color").toInt();
+  int thickness = server.arg("thickness").toInt();
+
+  // 限制參數範圍
+  x1 = constrain(x1, 0, EPD_WIDTH - 1);
+  y1 = constrain(y1, 0, EPD_HEIGHT - 1);
+  x2 = constrain(x2, 0, EPD_WIDTH - 1);
+  y2 = constrain(y2, 0, EPD_HEIGHT - 1);
+  color = constrain(color, 0, 15);
+  thickness = constrain(thickness, 1, 20);
+
+  epd_poweron();
+  
+  // 繪製指定粗細的線條
+  for (int i = 0; i < thickness; i++)
+  {
+    for (int j = 0; j < thickness; j++)
+    {
+      // 使用Bresenham算法繪製線條，並增加粗細
+      int dx = abs(x2 - x1);
+      int dy = abs(y2 - y1);
+      int sx = (x1 < x2) ? 1 : -1;
+      int sy = (y1 < y2) ? 1 : -1;
+      int err = dx - dy;
+      int x = x1, y = y1;
+
+      while (true)
+      {
+        // 繪製粗線的每個點
+        int px = x + i - thickness/2;
+        int py = y + j - thickness/2;
+        if (px >= 0 && px < EPD_WIDTH && py >= 0 && py < EPD_HEIGHT)
+        {
+          epd_fill_rect(px, py, 1, 1, color, framebuffer);
+        }
+
+        if (x == x2 && y == y2) break;
+        
+        int e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; x += sx; }
+        if (e2 < dx) { err += dx; y += sy; }
+      }
+    }
+  }
+  
+  epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  epd_poweroff();
+
+  String response = "Line drawn from (" + String(x1) + "," + String(y1) + 
+                   ") to (" + String(x2) + "," + String(y2) + 
+                   ") color:" + String(color) + " thickness:" + String(thickness);
+  server.send(200, "text/plain", response);
+}
+
+// ===== 進階畫圓控制 =====
+void handleDrawCircleAdvanced()
+{
+  if (!framebuffer)
+  {
+    server.send(400, "text/plain", "Framebuffer not available");
+    return;
+  }
+
+  // 獲取參數
+  int centerX = server.arg("centerX").toInt();
+  int centerY = server.arg("centerY").toInt();
+  int radius = server.arg("radius").toInt();
+  int borderColor = server.arg("borderColor").toInt();
+  int fillColor = server.arg("fillColor").toInt();
+  int borderThickness = server.arg("borderThickness").toInt();
+  bool hasBorder = server.arg("hasBorder").equals("true");
+  bool isFilled = server.arg("isFilled").equals("true");
+
+  // 限制參數範圍
+  centerX = constrain(centerX, 0, EPD_WIDTH - 1);
+  centerY = constrain(centerY, 0, EPD_HEIGHT - 1);
+  radius = constrain(radius, 1, min(EPD_WIDTH, EPD_HEIGHT) / 2);
+  borderColor = constrain(borderColor, 0, 15);
+  fillColor = constrain(fillColor, 0, 15);
+  borderThickness = constrain(borderThickness, 1, 10);
+
+  epd_poweron();
+
+  // 如果要填滿圓形
+  if (isFilled)
+  {
+    for (int y = -radius; y <= radius; y++)
+    {
+      for (int x = -radius; x <= radius; x++)
+      {
+        if (x * x + y * y <= radius * radius)
+        {
+          int px = centerX + x;
+          int py = centerY + y;
+          if (px >= 0 && px < EPD_WIDTH && py >= 0 && py < EPD_HEIGHT)
+          {
+            epd_fill_rect(px, py, 1, 1, fillColor, framebuffer);
+          }
+        }
+      }
+    }
+  }
+
+  // 如果要繪製邊框
+  if (hasBorder)
+  {
+    for (int t = 0; t < borderThickness; t++)
+    {
+      int r = radius - t;
+      if (r > 0)
+      {
+        // 使用中點圓算法繪製圓周
+        int x = 0;
+        int y = r;
+        int d = 1 - r;
+
+        while (x <= y)
+        {
+          // 繪製8個對稱點
+          int points[8][2] = {
+            {centerX + x, centerY + y}, {centerX - x, centerY + y},
+            {centerX + x, centerY - y}, {centerX - x, centerY - y},
+            {centerX + y, centerY + x}, {centerX - y, centerY + x},
+            {centerX + y, centerY - x}, {centerX - y, centerY - x}
+          };
+
+          for (int i = 0; i < 8; i++)
+          {
+            int px = points[i][0];
+            int py = points[i][1];
+            if (px >= 0 && px < EPD_WIDTH && py >= 0 && py < EPD_HEIGHT)
+            {
+              epd_fill_rect(px, py, 1, 1, borderColor, framebuffer);
+            }
+          }
+
+          if (d < 0)
+          {
+            d += 2 * x + 3;
+          }
+          else
+          {
+            d += 2 * (x - y) + 5;
+            y--;
+          }
+          x++;
+        }
+      }
+    }
+  }
+
+  epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  epd_poweroff();
+
+  String response = "Circle drawn at (" + String(centerX) + "," + String(centerY) + 
+                   ") radius:" + String(radius) + " border:" + (hasBorder ? "yes" : "no") + 
+                   " filled:" + (isFilled ? "yes" : "no");
+  server.send(200, "text/plain", response);
+}
+
+// ===== 進階畫矩形控制 =====
+void handleDrawRectAdvanced()
+{
+  if (!framebuffer)
+  {
+    server.send(400, "text/plain", "Framebuffer not available");
+    return;
+  }
+
+  // 獲取參數
+  int x = server.arg("x").toInt();
+  int y = server.arg("y").toInt();
+  int width = server.arg("width").toInt();
+  int height = server.arg("height").toInt();
+  int borderColor = server.arg("borderColor").toInt();
+  int fillColor = server.arg("fillColor").toInt();
+  int borderThickness = server.arg("borderThickness").toInt();
+  bool hasBorder = server.arg("hasBorder").equals("true");
+  bool isFilled = server.arg("isFilled").equals("true");
+
+  // 限制參數範圍
+  x = constrain(x, 0, EPD_WIDTH - 1);
+  y = constrain(y, 0, EPD_HEIGHT - 1);
+  width = constrain(width, 1, EPD_WIDTH - x);
+  height = constrain(height, 1, EPD_HEIGHT - y);
+  borderColor = constrain(borderColor, 0, 15);
+  fillColor = constrain(fillColor, 0, 15);
+  borderThickness = constrain(borderThickness, 1, min(width, height) / 2);
+
+  epd_poweron();
+
+  // 如果要填滿矩形
+  if (isFilled)
+  {
+    epd_fill_rect(x, y, width, height, fillColor, framebuffer);
+  }
+
+  // 如果要繪製邊框
+  if (hasBorder)
+  {
+    for (int t = 0; t < borderThickness; t++)
+    {
+      // 上邊
+      epd_fill_rect(x + t, y + t, width - 2 * t, 1, borderColor, framebuffer);
+      // 下邊
+      epd_fill_rect(x + t, y + height - 1 - t, width - 2 * t, 1, borderColor, framebuffer);
+      // 左邊
+      epd_fill_rect(x + t, y + t, 1, height - 2 * t, borderColor, framebuffer);
+      // 右邊
+      epd_fill_rect(x + width - 1 - t, y + t, 1, height - 2 * t, borderColor, framebuffer);
+    }
+  }
+
+  epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  epd_poweroff();
+
+  String response = "Rectangle drawn at (" + String(x) + "," + String(y) + 
+                   ") size:" + String(width) + "x" + String(height) + 
+                   " border:" + (hasBorder ? "yes" : "no") + 
+                   " filled:" + (isFilled ? "yes" : "no");
+  server.send(200, "text/plain", response);
+}
+
 void handleDrawText()
 {
   if (!framebuffer)
@@ -527,11 +1019,11 @@ void handleDrawText()
   if (bgColor > 15 && bgColor != 255)
     bgColor = 15;
 
-  // 限制字體大小範圍 (1-5)
+  // 限制字體大小範圍 (1-100)
   if (fontSize < 1)
     fontSize = 1;
-  if (fontSize > 5)
-    fontSize = 5;
+  if (fontSize > 100)
+    fontSize = 100;
 
   // 限制座標範圍
   if (x < 0)
@@ -593,8 +1085,8 @@ void handleDrawMultiText()
   // 限制字體大小範圍
   if (fontSize < 1)
     fontSize = 1;
-  if (fontSize > 5)
-    fontSize = 5;
+  if (fontSize > 100)
+    fontSize = 100;
 
   epd_poweron();
 
@@ -726,12 +1218,15 @@ void setup()
 
   // 更新 EPD 顯示
   epd_draw_grayscale_image(epd_full_screen(), framebuffer);
-  epd_poweroff(); // 設定 Web Server 路由
+  // 設定 Web Server 路由
   server.on("/", HTTP_GET, handleRoot);
   server.on("/clear", HTTP_GET, handleClear);
   server.on("/draw/line", HTTP_GET, handleDrawLine);
+  server.on("/draw/line/advanced", HTTP_GET, handleDrawLineAdvanced);
   server.on("/draw/rect", HTTP_GET, handleDrawRect);
+  server.on("/draw/rect/advanced", HTTP_GET, handleDrawRectAdvanced);
   server.on("/draw/circle", HTTP_GET, handleDrawCircle);
+  server.on("/draw/circle/advanced", HTTP_GET, handleDrawCircleAdvanced);
   server.on("/draw/text", HTTP_GET, handleDrawText);
   server.on("/draw/multitext", HTTP_GET, handleDrawMultiText);
   server.on("/upload", HTTP_POST, []()
