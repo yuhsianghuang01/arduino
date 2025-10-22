@@ -9,7 +9,9 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include "epd_driver.h"
-#include "utilities.h"
+
+// 移除可能有問題的 utilities.h
+// #include "utilities.h"
 
 // 嘗試包含字體檔案（如果可用）
 // 常見的 EPD 字體檔案
@@ -156,13 +158,13 @@ void epd_draw_text_advanced(const char *text, int x, int y, uint8_t textColor, u
 {
   if (fb && text && strlen(text) > 0)
   {
-    int base_char_width = 6;   // 基礎字符寬度
-    int base_char_height = 8;  // 基礎字符高度
-    
+    int base_char_width = 6;  // 基礎字符寬度
+    int base_char_height = 8; // 基礎字符高度
+
     // 計算實際字符尺寸（可以非常大）
     int char_width = base_char_width * fontSize;
     int char_height = base_char_height * fontSize;
-    
+
     int text_width = strlen(text) * char_width;
     int text_height = char_height;
 
@@ -191,12 +193,12 @@ void epd_draw_text_advanced(const char *text, int x, int y, uint8_t textColor, u
         if (c >= 32 && c <= 90) // 有效字符範圍
         {
           int char_index = c - 32;
-          
+
           // 遍歷字符點陣的每一列
           for (int col = 0; col < 5; col++)
           {
             uint8_t column = ascii_font_5x7[char_index][col];
-            
+
             // 遍歷字符點陣的每一行
             for (int row = 0; row < 7; row++)
             {
@@ -205,15 +207,15 @@ void epd_draw_text_advanced(const char *text, int x, int y, uint8_t textColor, u
                 // 計算放大後的像素塊位置和大小
                 int block_x = char_x + col * fontSize;
                 int block_y = y + row * fontSize;
-                
+
                 // 繪製放大的像素塊（fontSize x fontSize 的矩形）
-                if (block_x >= 0 && block_y >= 0 && 
+                if (block_x >= 0 && block_y >= 0 &&
                     block_x < EPD_WIDTH && block_y < EPD_HEIGHT)
                 {
                   // 計算實際繪製尺寸（避免超出邊界）
                   int block_width = min(fontSize, EPD_WIDTH - block_x);
                   int block_height = min(fontSize, EPD_HEIGHT - block_y);
-                  
+
                   epd_fill_rect(block_x, block_y, block_width, block_height, textColor, fb);
                 }
               }
@@ -236,6 +238,7 @@ void epd_draw_text_advanced(const char *text, int x, int y, uint8_t textColor, u
 
 void handleRoot()
 {
+  Serial.println("handleRoot");
   String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -251,6 +254,29 @@ void handleRoot()
     input[type="text"], input[type="number"] { padding:5px; margin:5px; }
     input[type="range"] { width:200px; }
     .color-value { font-weight:bold; }
+    
+    /* Canvas 手寫板樣式 */
+    .canvas-container { 
+      margin: 20px 0; 
+      padding: 15px; 
+      border: 1px solid #ccc; 
+      border-radius: 5px;
+      text-align: center;
+    }
+    #drawingCanvas {
+      border: 2px solid #333;
+      cursor: crosshair;
+      width: 100%;
+      max-width: 800px;
+      background-color: white;
+    }
+    .canvas-controls {
+      margin: 10px 0;
+    }
+    .canvas-controls button {
+      margin: 2px 5px;
+      padding: 8px 15px;
+    }
   </style>
 </head>
 <body>
@@ -259,6 +285,22 @@ void handleRoot()
   <button onclick="fetch('/draw/line')">Draw Random Line</button>
   <button onclick="fetch('/draw/rect')">Draw Random Rect</button>
   <button onclick="fetch('/draw/circle')">Draw Random Circle</button>
+
+  <div class="canvas-container">
+    <h3>手寫繪圖板 (小尺寸測試版)</h3>
+    <p>注意：使用100x60小尺寸確保數據傳輸穩定，將自動縮放到EPD</p>
+    <canvas id="drawingCanvas" width="100" height="60"></canvas>
+    <div class="canvas-controls">
+      <button onclick="clearCanvas()">清除畫布</button>
+      <button onclick="sendCanvasToEPD()">同步到EPD</button>
+      <label>筆刷大小:</label>
+      <input type="range" id="brushSize" min="1" max="20" value="3" oninput="updateBrushSize()">
+      <span class="color-value" id="brushSizeValue">3</span>
+      <label>筆刷顏色:</label>
+      <input type="range" id="brushColor" min="0" max="15" value="0" oninput="updateBrushColor()">
+      <span class="color-value" id="brushColorValue">0 (黑色)</span>
+    </div>
+  </div>
 
   <div class="text-control">
     <h3>文字控制</h3>
@@ -421,6 +463,208 @@ void handleRoot()
   </div>
 
   <script>
+    // Canvas 繪圖變數
+    let canvas = null;
+    let ctx = null;
+    let isDrawing = false;
+    let lastX = 0;
+    let lastY = 0;
+    let currentBrushSize = 3;
+    let currentBrushColor = 0;
+    
+    // 初始化 Canvas
+    function initCanvas() {
+      canvas = document.getElementById('drawingCanvas');
+      ctx = canvas.getContext('2d');
+      
+      // 設置 canvas 實際尺寸與顯示尺寸
+      const epdRatio = %HEIGHT% / %WIDTH%; // EPD的高寬比
+      const containerWidth = Math.min(800, window.innerWidth - 100);
+      canvas.style.width = containerWidth + 'px';
+      canvas.style.height = (containerWidth * epdRatio) + 'px';
+      
+      // 設置繪圖屬性
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      
+      // 設置預設繪圖樣式
+      ctx.strokeStyle = 'black';
+      ctx.lineWidth = 3;
+      
+      console.log('Canvas initialized:', canvas.width, 'x', canvas.height);
+      
+      // 滑鼠事件
+      canvas.addEventListener('mousedown', startDrawing);
+      canvas.addEventListener('mousemove', draw);
+      canvas.addEventListener('mouseup', stopDrawing);
+      canvas.addEventListener('mouseout', stopDrawing);
+      
+      // 觸控事件
+      canvas.addEventListener('touchstart', handleTouch);
+      canvas.addEventListener('touchmove', handleTouch);
+      canvas.addEventListener('touchend', stopDrawing);
+    }
+    
+    function startDrawing(e) {
+      isDrawing = true;
+      [lastX, lastY] = getMousePos(e);
+    }
+    
+    function draw(e) {
+      if (!isDrawing) return;
+      
+      const [currentX, currentY] = getMousePos(e);
+      
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.strokeStyle = getCanvasColor(currentBrushColor);
+      ctx.lineWidth = currentBrushSize;
+      
+      ctx.beginPath();
+      ctx.moveTo(lastX, lastY);
+      ctx.lineTo(currentX, currentY);
+      ctx.stroke();
+      
+      [lastX, lastY] = [currentX, currentY];
+    }
+    
+    function stopDrawing() {
+      isDrawing = false;
+    }
+    
+    function getMousePos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      
+      return [
+        (e.clientX - rect.left) * scaleX,
+        (e.clientY - rect.top) * scaleY
+      ];
+    }
+    
+    function handleTouch(e) {
+      e.preventDefault();
+      const touch = e.touches[0];
+      const mouseEvent = new MouseEvent(e.type === 'touchstart' ? 'mousedown' : 
+                                       e.type === 'touchmove' ? 'mousemove' : 'mouseup', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+      });
+      canvas.dispatchEvent(mouseEvent);
+    }
+    
+    function getCanvasColor(colorValue) {
+      // 將 0-15 的顏色值轉換為 canvas 顏色
+      // 0=黑色, 15=白色
+      const gray = Math.round(colorValue * 255 / 15);
+      return `rgb(${gray}, ${gray}, ${gray})`;
+    }
+    
+    function clearCanvas() {
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      console.log('Canvas cleared');
+    }
+    
+    function updateBrushSize() {
+      currentBrushSize = document.getElementById('brushSize').value;
+      document.getElementById('brushSizeValue').textContent = currentBrushSize;
+    }
+    
+    function updateBrushColor() {
+      currentBrushColor = document.getElementById('brushColor').value;
+      const colorName = getColorName(currentBrushColor);
+      document.getElementById('brushColorValue').textContent = currentBrushColor + ' (' + colorName + ')';
+    }
+    
+    function sendCanvasToEPD() {
+      console.log('sendCanvasToEPD called');
+      
+      // 檢查 canvas 是否已初始化
+      if (!canvas || !ctx) {
+        console.error('Canvas not initialized');
+        alert('Canvas 尚未初始化');
+        return;
+      }
+      
+      // 將 canvas 轉換為圖像數據並發送到 EPD
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixelData = imageData.data;
+      
+      console.log('Canvas size:', canvas.width, 'x', canvas.height);
+      console.log('Total pixels:', canvas.width * canvas.height);
+      console.log('ImageData length:', pixelData.length);
+      
+      // 使用壓縮格式：只傳送非白色像素的位置和顏色
+      const compressedData = [];
+      for (let i = 0; i < pixelData.length; i += 4) {
+        const gray = pixelData[i];
+        const epdGray = Math.round(gray * 15 / 255);
+        
+        // 只記錄非白色像素 (值不等於15)
+        if (epdGray !== 15) {
+          const pixelIndex = i / 4;
+          const x = pixelIndex % canvas.width;
+          const y = Math.floor(pixelIndex / canvas.width);
+          compressedData.push(x + ',' + y + ',' + epdGray);
+        }
+      }
+      
+      console.log('Total pixels:', canvas.width * canvas.height);
+      console.log('Non-white pixels:', compressedData.length);
+      console.log('Compression ratio:', ((compressedData.length / (canvas.width * canvas.height)) * 100).toFixed(2) + '%');
+      
+      // 將壓縮數據編碼為字串
+      const dataStr = compressedData.join(';');
+      
+      console.log('Compressed data string length:', dataStr.length);
+      console.log('First 100 chars of compressed data:', dataStr.substring(0, 100));
+      
+      // 檢查數據大小
+      if (dataStr.length > 10000) {
+        console.warn('Warning: Compressed data still large:', dataStr.length, 'chars');
+        if (dataStr.length > 50000) {
+          alert('警告：壓縮後數據仍過大 (' + dataStr.length + ' 字符)，請減少繪圖內容。');
+          return;
+        }
+      }
+      
+      // 準備 POST 數據 (使用壓縮格式)
+      const postData = 'width=' + canvas.width + '&height=' + canvas.height + '&compressed=1&data=' + encodeURIComponent(dataStr);
+      console.log('POST data length:', postData.length);
+      console.log('POST data preview:', postData.substring(0, 200));
+      
+      // 最終數據大小檢查
+      if (postData.length > 20000) {
+        console.error('POST data too large:', postData.length, 'chars');
+        alert('錯誤：POST數據過大 (' + postData.length + ' 字符)，請減少繪圖內容。');
+        return;
+      }
+      
+      // 發送到服務器
+      fetch('/draw/canvas', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: postData
+      })
+      .then(response => {
+        console.log('Response status:', response.status);
+        console.log('Response headers:', response.headers);
+        return response.text();
+      })
+      .then(data => {
+        console.log('Server response:', data);
+        alert('Canvas 已同步到 EPD: ' + data);
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        alert('同步失敗: ' + error.message);
+      });
+    }
     function updateTextColorValue() {
       const color = document.getElementById('textColor').value;
       const colorNames = ['黑色', '深灰', '中灰', '淺灰', '白色'];
@@ -689,6 +933,13 @@ void handleRoot()
     updateRectBorderColorValue();
     updateRectBorderThicknessValue();
     updateRectFillColorValue();
+    updateBrushSize();
+    updateBrushColor();
+    
+    // 初始化 Canvas
+    window.onload = function() {
+      initCanvas();
+    };
   </script>
 </body>
 </html>
@@ -703,6 +954,7 @@ void handleRoot()
 
 void handleClear()
 {
+  Serial.println("handleClear");
   if (framebuffer)
   {
     memset(framebuffer, 0xFF, FB_SIZE);
@@ -715,6 +967,7 @@ void handleClear()
 
 void handleDrawLine()
 {
+  Serial.println("handleDrawLine");
   if (framebuffer)
   {
     epd_poweron();
@@ -727,6 +980,7 @@ void handleDrawLine()
 
 void handleDrawRect()
 {
+  Serial.println("handleDrawRect");
   if (framebuffer)
   {
     epd_poweron();
@@ -739,6 +993,7 @@ void handleDrawRect()
 
 void handleDrawCircle()
 {
+  Serial.println("handleDrawCircle");
   if (framebuffer)
   {
     epd_poweron();
@@ -752,6 +1007,7 @@ void handleDrawCircle()
 // ===== 進階畫線控制 =====
 void handleDrawLineAdvanced()
 {
+  Serial.println("handleDrawLineAdvanced");
   if (!framebuffer)
   {
     server.send(400, "text/plain", "Framebuffer not available");
@@ -775,7 +1031,7 @@ void handleDrawLineAdvanced()
   thickness = constrain(thickness, 1, 20);
 
   epd_poweron();
-  
+
   // 繪製指定粗細的線條
   for (int i = 0; i < thickness; i++)
   {
@@ -792,34 +1048,44 @@ void handleDrawLineAdvanced()
       while (true)
       {
         // 繪製粗線的每個點
-        int px = x + i - thickness/2;
-        int py = y + j - thickness/2;
+        int px = x + i - thickness / 2;
+        int py = y + j - thickness / 2;
         if (px >= 0 && px < EPD_WIDTH && py >= 0 && py < EPD_HEIGHT)
         {
           epd_fill_rect(px, py, 1, 1, color, framebuffer);
         }
 
-        if (x == x2 && y == y2) break;
-        
+        if (x == x2 && y == y2)
+          break;
+
         int e2 = 2 * err;
-        if (e2 > -dy) { err -= dy; x += sx; }
-        if (e2 < dx) { err += dx; y += sy; }
+        if (e2 > -dy)
+        {
+          err -= dy;
+          x += sx;
+        }
+        if (e2 < dx)
+        {
+          err += dx;
+          y += sy;
+        }
       }
     }
   }
-  
+
   epd_draw_grayscale_image(epd_full_screen(), framebuffer);
   epd_poweroff();
 
-  String response = "Line drawn from (" + String(x1) + "," + String(y1) + 
-                   ") to (" + String(x2) + "," + String(y2) + 
-                   ") color:" + String(color) + " thickness:" + String(thickness);
+  String response = "Line drawn from (" + String(x1) + "," + String(y1) +
+                    ") to (" + String(x2) + "," + String(y2) +
+                    ") color:" + String(color) + " thickness:" + String(thickness);
   server.send(200, "text/plain", response);
 }
 
 // ===== 進階畫圓控制 =====
 void handleDrawCircleAdvanced()
 {
+  Serial.println("handleDrawCircleAdvanced");
   if (!framebuffer)
   {
     server.send(400, "text/plain", "Framebuffer not available");
@@ -883,11 +1149,7 @@ void handleDrawCircleAdvanced()
         {
           // 繪製8個對稱點
           int points[8][2] = {
-            {centerX + x, centerY + y}, {centerX - x, centerY + y},
-            {centerX + x, centerY - y}, {centerX - x, centerY - y},
-            {centerX + y, centerY + x}, {centerX - y, centerY + x},
-            {centerX + y, centerY - x}, {centerX - y, centerY - x}
-          };
+              {centerX + x, centerY + y}, {centerX - x, centerY + y}, {centerX + x, centerY - y}, {centerX - x, centerY - y}, {centerX + y, centerY + x}, {centerX - y, centerY + x}, {centerX + y, centerY - x}, {centerX - y, centerY - x}};
 
           for (int i = 0; i < 8; i++)
           {
@@ -917,15 +1179,16 @@ void handleDrawCircleAdvanced()
   epd_draw_grayscale_image(epd_full_screen(), framebuffer);
   epd_poweroff();
 
-  String response = "Circle drawn at (" + String(centerX) + "," + String(centerY) + 
-                   ") radius:" + String(radius) + " border:" + (hasBorder ? "yes" : "no") + 
-                   " filled:" + (isFilled ? "yes" : "no");
+  String response = "Circle drawn at (" + String(centerX) + "," + String(centerY) +
+                    ") radius:" + String(radius) + " border:" + (hasBorder ? "yes" : "no") +
+                    " filled:" + (isFilled ? "yes" : "no");
   server.send(200, "text/plain", response);
 }
 
 // ===== 進階畫矩形控制 =====
 void handleDrawRectAdvanced()
 {
+  Serial.println("handleDrawRectAdvanced");
   if (!framebuffer)
   {
     server.send(400, "text/plain", "Framebuffer not available");
@@ -979,15 +1242,289 @@ void handleDrawRectAdvanced()
   epd_draw_grayscale_image(epd_full_screen(), framebuffer);
   epd_poweroff();
 
-  String response = "Rectangle drawn at (" + String(x) + "," + String(y) + 
-                   ") size:" + String(width) + "x" + String(height) + 
-                   " border:" + (hasBorder ? "yes" : "no") + 
-                   " filled:" + (isFilled ? "yes" : "no");
+  String response = "Rectangle drawn at (" + String(x) + "," + String(y) +
+                    ") size:" + String(width) + "x" + String(height) +
+                    " border:" + (hasBorder ? "yes" : "no") +
+                    " filled:" + (isFilled ? "yes" : "no");
   server.send(200, "text/plain", response);
+}
+
+// ===== Canvas 繪圖數據處理 =====
+void handleCanvasData()
+{
+  Serial.println("handleCanvasData");
+  Serial.println("Canvas data handler called");
+
+  // 顯示所有接收到的參數
+  Serial.printf("Number of arguments: %d\n", server.args());
+  for (int i = 0; i < server.args(); i++)
+  {
+    Serial.printf("Arg %d: %s = %s\n", i, server.argName(i).c_str(), server.arg(i).c_str());
+  }
+
+  if (!framebuffer)
+  {
+    Serial.println("ERROR: Framebuffer not available");
+    server.send(400, "text/plain", "Framebuffer not available");
+    return;
+  }
+
+  // 獲取 canvas 數據
+  int canvasWidth = server.arg("width").toInt();
+  int canvasHeight = server.arg("height").toInt();
+  String dataStr = server.arg("data");
+  bool isCompressed = server.hasArg("compressed") && server.arg("compressed").equals("1");
+
+  Serial.printf("Parsed parameters: width=%d, height=%d, data_length=%d, compressed=%s\n",
+                canvasWidth, canvasHeight, dataStr.length(), isCompressed ? "yes" : "no"); // 檢查數據大小合理性
+  if (canvasWidth > 0 && canvasHeight > 0)
+  {
+    int expectedPixels = canvasWidth * canvasHeight;
+    Serial.printf("Expected pixels: %d\n", expectedPixels);
+
+    if (expectedPixels > 100000)
+    {
+      Serial.printf("ERROR: Canvas too large: %dx%d = %d pixels\n", canvasWidth, canvasHeight, expectedPixels);
+      server.send(400, "text/plain", "Canvas size too large");
+      return;
+    }
+  }
+
+  if (dataStr.length() == 0)
+  {
+    Serial.println("ERROR: No canvas data received");
+
+    // 檢查是否有其他可能的參數名稱
+    if (server.hasArg("width"))
+    {
+      Serial.printf("Width arg exists: %s\n", server.arg("width").c_str());
+    }
+    else
+    {
+      Serial.println("Width arg missing");
+    }
+
+    if (server.hasArg("height"))
+    {
+      Serial.printf("Height arg exists: %s\n", server.arg("height").c_str());
+    }
+    else
+    {
+      Serial.println("Height arg missing");
+    }
+
+    if (server.hasArg("data"))
+    {
+      Serial.printf("Data arg exists but empty\n");
+    }
+    else
+    {
+      Serial.println("Data arg missing completely");
+    }
+
+    server.send(400, "text/plain", "No canvas data received");
+    return;
+  }
+
+  Serial.printf("Canvas data received: %dx%d, data length: %d\n", canvasWidth, canvasHeight, dataStr.length());
+  Serial.printf("EPD size: %dx%d\n", EPD_WIDTH, EPD_HEIGHT);
+
+  // 安全檢查
+  if (canvasWidth <= 0 || canvasHeight <= 0 || canvasWidth > 2000 || canvasHeight > 2000)
+  {
+    Serial.printf("ERROR: Invalid canvas size: %dx%d\n", canvasWidth, canvasHeight);
+    server.send(400, "text/plain", "Invalid canvas size");
+    return;
+  }
+
+  epd_poweron();
+  Serial.println("EPD powered on for canvas drawing");
+
+  // 清除原有內容
+  memset(framebuffer, 0xFF, FB_SIZE);
+  Serial.println("Framebuffer cleared");
+
+  int pixelCount = 0;
+  int nonWhitePixels = 0;
+
+  if (isCompressed)
+  {
+    Serial.println("Processing compressed data format");
+
+    // 處理壓縮格式：x,y,color;x,y,color;...
+    int startPos = 0;
+    for (int i = 0; i <= dataStr.length(); i++)
+    {
+      if (i == dataStr.length() || dataStr[i] == ';')
+      {
+        if (i > startPos)
+        {
+          String pixelStr = dataStr.substring(startPos, i);
+
+          // 解析 x,y,color 格式
+          int firstComma = pixelStr.indexOf(',');
+          int secondComma = pixelStr.indexOf(',', firstComma + 1);
+
+          if (firstComma > 0 && secondComma > firstComma)
+          {
+            int x = pixelStr.substring(0, firstComma).toInt();
+            int y = pixelStr.substring(firstComma + 1, secondComma).toInt();
+            int color = pixelStr.substring(secondComma + 1).toInt();
+
+            // 限制範圍
+            color = constrain(color, 0, 15);
+
+            if (x >= 0 && x < canvasWidth && y >= 0 && y < canvasHeight)
+            {
+              // 映射到 EPD 座標
+              int epdX = (x * EPD_WIDTH) / canvasWidth;
+              int epdY = (y * EPD_HEIGHT) / canvasHeight;
+
+              // 計算縮放區域大小
+              int pixelWidth = max(1, EPD_WIDTH / canvasWidth);
+              int pixelHeight = max(1, EPD_HEIGHT / canvasHeight);
+
+              // 填充縮放區域
+              for (int dx = 0; dx < pixelWidth && epdX + dx < EPD_WIDTH; dx++)
+              {
+                for (int dy = 0; dy < pixelHeight && epdY + dy < EPD_HEIGHT; dy++)
+                {
+                  epd_fill_rect(epdX + dx, epdY + dy, 1, 1, color, framebuffer);
+                }
+              }
+
+              nonWhitePixels++;
+            }
+            pixelCount++;
+          }
+        }
+        startPos = i + 1;
+      }
+    }
+
+    Serial.printf("Compressed format: processed %d non-white pixels\n", pixelCount);
+  }
+  else
+  {
+    Serial.println("Processing uncompressed data format");
+
+    // 原始格式處理邏輯
+    int startPos = 0;
+    for (int i = 0; i <= dataStr.length(); i++)
+    {
+      if (i == dataStr.length() || dataStr[i] == ',')
+      {
+        if (i > startPos)
+        {
+          String pixelStr = dataStr.substring(startPos, i);
+          int pixelValue = pixelStr.toInt();
+
+          // 限制像素值範圍
+          pixelValue = constrain(pixelValue, 0, 15);
+
+          // 如果是非白色像素，計數
+          if (pixelValue != 15)
+          {
+            nonWhitePixels++;
+          }
+
+          // 計算在 EPD 上的位置
+          int canvasX = pixelCount % canvasWidth;
+          int canvasY = pixelCount / canvasWidth;
+
+          // 直接映射到 EPD 尺寸
+          int epdX = (canvasX * EPD_WIDTH) / canvasWidth;
+          int epdY = (canvasY * EPD_HEIGHT) / canvasHeight;
+
+          // 確保座標在有效範圍內
+          if (epdX >= 0 && epdX < EPD_WIDTH && epdY >= 0 && epdY < EPD_HEIGHT)
+          {
+            // 計算每個 Canvas 像素對應的 EPD 像素區域大小
+            int pixelWidth = max(1, EPD_WIDTH / canvasWidth);
+            int pixelHeight = max(1, EPD_HEIGHT / canvasHeight);
+
+            // 填充對應的矩形區域
+            for (int dx = 0; dx < pixelWidth && epdX + dx < EPD_WIDTH; dx++)
+            {
+              for (int dy = 0; dy < pixelHeight && epdY + dy < EPD_HEIGHT; dy++)
+              {
+                epd_fill_rect(epdX + dx, epdY + dy, 1, 1, pixelValue, framebuffer);
+              }
+            }
+          }
+
+          pixelCount++;
+        }
+        startPos = i + 1;
+      }
+    }
+  }
+
+  // Debug 輸出
+  Serial.printf("Parsed %d pixels, %d non-white pixels\n", pixelCount, nonWhitePixels);
+
+  // 顯示 framebuffer 前 32 bytes 的內容
+  Serial.print("Framebuffer sample: ");
+  for (int i = 0; i < 32 && i < FB_SIZE; i++)
+  {
+    Serial.printf("%02X ", framebuffer[i]);
+  }
+  Serial.println();
+
+  // 顯示一些像素值的樣本
+  Serial.print("First 10 pixel values: ");
+  int sampleStartPos = 0;
+  int sampleCount = 0;
+  for (int i = 0; i <= dataStr.length() && sampleCount < 10; i++)
+  {
+    if (i == dataStr.length() || dataStr[i] == ',')
+    {
+      if (i > sampleStartPos)
+      {
+        String pixelStr = dataStr.substring(sampleStartPos, i);
+        Serial.print(pixelStr.toInt());
+        Serial.print(" ");
+        sampleCount++;
+      }
+      sampleStartPos = i + 1;
+    }
+  }
+  Serial.println();
+
+  // 檢查是否有有效像素
+  if (pixelCount == 0)
+  {
+    Serial.println("ERROR: No valid pixels received");
+    epd_poweroff();
+    server.send(400, "text/plain", "No valid pixels received");
+    return;
+  }
+
+  if (nonWhitePixels == 0)
+  {
+    Serial.println("Warning: All pixels are white (value 15)");
+  }
+  else
+  {
+    Serial.printf("Found %d non-white pixels out of %d total\n", nonWhitePixels, pixelCount);
+  }
+
+  // 更新 EPD 顯示
+  Serial.println("Updating EPD display...");
+  epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  epd_poweroff();
+  Serial.println("EPD display updated and powered off");
+
+  String response = "Canvas data processed: " + String(pixelCount) + " pixels from " +
+                    String(canvasWidth) + "x" + String(canvasHeight) + " canvas, " +
+                    String(nonWhitePixels) + " non-white pixels";
+  server.send(200, "text/plain", response);
+  Serial.println("Response sent to client");
 }
 
 void handleDrawText()
 {
+  Serial.println("handleDrawText");
   if (!framebuffer)
   {
     server.send(400, "text/plain", "Framebuffer not available");
@@ -1048,6 +1585,7 @@ void handleDrawText()
 
 void handleDrawMultiText()
 {
+  Serial.println("handleDrawMultiText");
   if (!framebuffer)
   {
     server.send(400, "text/plain", "Framebuffer not available");
@@ -1127,6 +1665,7 @@ void handleDrawMultiText()
 
 void handleUpload()
 {
+  Serial.println("handleUpload");
   HTTPUpload &upload = server.upload();
   if (upload.status == UPLOAD_FILE_START)
   {
@@ -1154,6 +1693,7 @@ void handleUpload()
 
 void notFound()
 {
+  Serial.println("notFound");
   server.send(404, "text/plain", "Not found");
 }
 
@@ -1161,9 +1701,12 @@ void notFound()
 void setup()
 {
   Serial.begin(115200);
-  delay(1000);
+  delay(2000); // 增加延遲確保序列埠穩定
+
+  Serial.println("Starting EPD Controller...");
 
   // 初始化 framebuffer
+  Serial.println("Initializing framebuffer...");
   framebuffer = (uint8_t *)ps_calloc(1, FB_SIZE);
   if (!framebuffer)
   {
@@ -1172,14 +1715,24 @@ void setup()
       delay(100);
   }
   memset(framebuffer, 0xFF, FB_SIZE);
+  Serial.println("Framebuffer initialized");
 
   // 初始化 EPD
+  Serial.println("Initializing EPD...");
   epd_init();
+  Serial.println("EPD init done");
+
   epd_poweron();
+  Serial.println("EPD powered on");
+
   epd_clear();
+  Serial.println("EPD cleared");
+
   epd_poweroff();
+  Serial.println("EPD powered off");
 
   // 啟動 Wi-Fi AP
+  Serial.println("Starting WiFi AP...");
   WiFi.softAP(ssid, password);
   IPAddress IP = WiFi.softAPIP();
   String ipStr = "http://" + IP.toString() + ":80";
@@ -1189,6 +1742,7 @@ void setup()
   Serial.println(ipStr);
 
   // 在 EPD 左上角顯示 IP 地址
+  Serial.println("Drawing IP on EPD...");
   epd_poweron();
 
   // 方法1: 使用簡化的 IP 顯示（推薦）
@@ -1198,27 +1752,13 @@ void setup()
   // 在下方顯示 SSID
   draw_ip_simple(10, 25, ssid, 0, framebuffer);
 
-  // 方法2: 如果上面的方法不行，使用大號矩形顯示
-  // 用矩形繪製 IP 的每個數字（備用方案）
-  /*
-  String ipOnly = IP.toString();
-  epd_draw_rect(10, 40, ipOnly.length() * 12, 16, 0, framebuffer);
-  for (int i = 0; i < ipOnly.length(); i++) {
-      if (ipOnly[i] == '.') {
-          epd_fill_rect(22 + i * 12, 50, 2, 2, 0, framebuffer);
-      } else if (ipOnly[i] >= '0' && ipOnly[i] <= '9') {
-          // 用矩形表示數字
-          int digit = ipOnly[i] - '0';
-          for (int j = 0; j < digit % 4; j++) {
-              epd_draw_hline(12 + i * 12, 42 + j * 3, 8, 0, framebuffer);
-          }
-      }
-  }
-  */
-
   // 更新 EPD 顯示
   epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  epd_poweroff();
+  Serial.println("IP displayed on EPD");
+
   // 設定 Web Server 路由
+  Serial.println("Setting up web server routes...");
   server.on("/", HTTP_GET, handleRoot);
   server.on("/clear", HTTP_GET, handleClear);
   server.on("/draw/line", HTTP_GET, handleDrawLine);
@@ -1229,16 +1769,37 @@ void setup()
   server.on("/draw/circle/advanced", HTTP_GET, handleDrawCircleAdvanced);
   server.on("/draw/text", HTTP_GET, handleDrawText);
   server.on("/draw/multitext", HTTP_GET, handleDrawMultiText);
+  server.on("/draw/canvas", HTTP_POST, handleCanvasData);
   server.on("/upload", HTTP_POST, []()
             { server.send(200); }, handleUpload);
 
   server.onNotFound(notFound);
+
+  // 設定 WebServer 的緩衝區大小以處理大型 POST 數據
+  const char *headerKeys[] = {"Content-Length"};
+  server.collectHeaders(headerKeys, 1);
+
   server.begin();
+  Serial.println("Web server started");
+  Serial.println("Setup complete!");
+  Serial.print("Connect to WiFi: ");
+  Serial.println(ssid);
+  Serial.print("Open browser: ");
+  Serial.println(ipStr);
 }
 
 // ===== Loop =====
 void loop()
 {
   server.handleClient();
+
+  // 每10秒輸出一次心跳信號，確認程式在運行
+  static unsigned long lastHeartbeat = 0;
+  if (millis() - lastHeartbeat > 10000)
+  {
+    Serial.println("System running... Waiting for connections");
+    lastHeartbeat = millis();
+  }
+
   delay(1); // 讓出 CPU
 }
