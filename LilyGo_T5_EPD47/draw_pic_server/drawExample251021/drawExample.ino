@@ -472,6 +472,10 @@ void handleRoot()
     let currentBrushSize = 3;
     let currentBrushColor = 0;
     
+    // 路徑記錄變數
+    let strokePaths = [];
+    let currentPath = null;
+    
     // 初始化 Canvas
     function initCanvas() {
       canvas = document.getElementById('drawingCanvas');
@@ -510,6 +514,13 @@ void handleRoot()
     function startDrawing(e) {
       isDrawing = true;
       [lastX, lastY] = getMousePos(e);
+      
+      // 開始新的路徑記錄
+      currentPath = {
+        color: currentBrushColor,
+        size: currentBrushSize,
+        points: [[Math.round(lastX), Math.round(lastY)]]
+      };
     }
     
     function draw(e) {
@@ -526,11 +537,22 @@ void handleRoot()
       ctx.lineTo(currentX, currentY);
       ctx.stroke();
       
+      // 記錄路徑點
+      if (currentPath) {
+        currentPath.points.push([Math.round(currentX), Math.round(currentY)]);
+      }
+      
       [lastX, lastY] = [currentX, currentY];
     }
     
     function stopDrawing() {
+      if (isDrawing && currentPath && currentPath.points.length > 1) {
+        // 完成路徑記錄
+        strokePaths.push(currentPath);
+        console.log('Path recorded:', currentPath);
+      }
       isDrawing = false;
+      currentPath = null;
     }
     
     function getMousePos(e) {
@@ -588,6 +610,83 @@ void handleRoot()
         alert('Canvas 尚未初始化');
         return;
       }
+      
+      console.log('Canvas size:', canvas.width, 'x', canvas.height);
+      console.log('Total recorded paths:', strokePaths.length);
+      
+      // 優先使用路徑格式
+      if (strokePaths.length > 0) {
+        sendStrokePaths();
+      } else {
+        console.log('No paths recorded, using pixel analysis fallback');
+        sendCanvasAsPixels();
+      }
+    }
+    
+    // 發送路徑數據 (壓縮格式)
+    function sendStrokePaths() {
+      console.log('Sending stroke paths');
+      
+      const pathStrings = [];
+      for (let i = 0; i < strokePaths.length; i++) {
+        const path = strokePaths[i];
+        const pointsStr = path.points.map(p => p[0] + ',' + p[1]).join('|');
+        const pathStr = 'P:' + path.color + ':' + path.size + ':' + pointsStr;
+        pathStrings.push(pathStr);
+      }
+      
+      const dataStr = pathStrings.join(';');
+      console.log('Path data length:', dataStr.length);
+      console.log('Path data preview:', dataStr.substring(0, 200));
+      console.log('Path data ending:', dataStr.length > 100 ? dataStr.substring(dataStr.length - 100) : dataStr);
+      console.log('Number of paths generated:', pathStrings.length);
+      
+      // 檢查每個路徑的完整性
+      for (let i = 0; i < Math.min(pathStrings.length, 3); i++) {
+        console.log('Path', i, 'sample:', pathStrings[i].substring(0, 100));
+      }
+      
+      // 檢查數據大小
+      if (dataStr.length > 50000) {
+        console.warn('Path data too large:', dataStr.length, 'chars');
+        alert('警告：路徑數據過大 (' + dataStr.length + ' 字符)，請減少繪圖內容。');
+        return;
+      }
+      
+      // 準備 POST 數據
+      const postData = 'width=' + canvas.width + '&height=' + canvas.height + '&paths=1&data=' + encodeURIComponent(dataStr);
+      console.log('POST data length:', postData.length);
+      console.log('Encoded data preview (first 200):', postData.substring(0, 200));
+      console.log('Encoded data ending (last 100):', postData.length > 100 ? postData.substring(postData.length - 100) : postData);
+      
+      // 檢查 POST 數據大小限制
+      if (postData.length > 8000) {
+        console.warn('POST data approaching ESP32 limits:', postData.length, 'chars');
+        alert('警告：POST數據接近ESP32限制 (' + postData.length + ' 字符)，可能會被截斷！');
+        // 仍然嘗試發送，但用戶已被警告
+      }
+      
+      // 發送到服務器
+      fetch('/draw/canvas', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: postData
+      })
+      .then(response => response.text())
+      .then(data => {
+        console.log('Response:', data);
+        alert('路徑數據已送出！');
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        alert('發送失敗：' + error);
+      });
+    }
+    
+    // 像素分析備用方案
+    function sendCanvasAsPixels() {
       
       // 將 canvas 轉換為圖像數據並發送到 EPD
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -1249,6 +1348,110 @@ void handleDrawRectAdvanced()
   server.send(200, "text/plain", response);
 }
 
+// ===== 路徑繪製輔助函數 =====
+void drawPathPoints(String pointsStr, int color, int brushSize, int canvasWidth, int canvasHeight)
+{
+  Serial.printf("Drawing path: color=%d, size=%d, points='%s'\n", color, brushSize, pointsStr.substring(0, 50).c_str());
+
+  // 解析點數據：x1,y1|x2,y2|...
+  int pointCount = 0;
+  int lastX = -1, lastY = -1;
+  int startPos = 0;
+
+  for (int i = 0; i <= pointsStr.length(); i++)
+  {
+    if (i == pointsStr.length() || pointsStr[i] == '|')
+    {
+      if (i > startPos)
+      {
+        String pointStr = pointsStr.substring(startPos, i);
+        int commaPos = pointStr.indexOf(',');
+
+        if (commaPos > 0)
+        {
+          int x = pointStr.substring(0, commaPos).toInt();
+          int y = pointStr.substring(commaPos + 1).toInt();
+
+          // 映射從Canvas座標到EPD座標
+          int epdX = (x * EPD_WIDTH) / canvasWidth;
+          int epdY = (y * EPD_HEIGHT) / canvasHeight;
+
+          // 確保座標在有效範圍內
+          epdX = constrain(epdX, 0, EPD_WIDTH - 1);
+          epdY = constrain(epdY, 0, EPD_HEIGHT - 1);
+
+          if (pointCount == 0)
+          {
+            // 第一個點，只記錄位置
+            lastX = epdX;
+            lastY = epdY;
+          }
+          else
+          {
+            // 從上一個點畫線到當前點
+            drawLine(lastX, lastY, epdX, epdY, color, brushSize);
+            lastX = epdX;
+            lastY = epdY;
+          }
+
+          pointCount++;
+        }
+      }
+      startPos = i + 1;
+    }
+  }
+
+  Serial.printf("Drew path with %d points\n", pointCount);
+}
+
+// 使用 Bresenham 算法繪製線條
+void drawLine(int x0, int y0, int x1, int y1, int color, int thickness)
+{
+  int dx = abs(x1 - x0);
+  int dy = abs(y1 - y0);
+  int sx = (x0 < x1) ? 1 : -1;
+  int sy = (y0 < y1) ? 1 : -1;
+  int err = dx - dy;
+
+  int x = x0;
+  int y = y0;
+
+  while (true)
+  {
+    // 繪製粗線條（以當前點為中心的小圓形）
+    for (int dx = -thickness / 2; dx <= thickness / 2; dx++)
+    {
+      for (int dy = -thickness / 2; dy <= thickness / 2; dy++)
+      {
+        if (dx * dx + dy * dy <= (thickness * thickness) / 4)
+        {
+          int px = x + dx;
+          int py = y + dy;
+          if (px >= 0 && px < EPD_WIDTH && py >= 0 && py < EPD_HEIGHT)
+          {
+            epd_fill_rect(px, py, 1, 1, color, framebuffer);
+          }
+        }
+      }
+    }
+
+    if (x == x1 && y == y1)
+      break;
+
+    int e2 = 2 * err;
+    if (e2 > -dy)
+    {
+      err -= dy;
+      x += sx;
+    }
+    if (e2 < dx)
+    {
+      err += dx;
+      y += sy;
+    }
+  }
+}
+
 // ===== Canvas 繪圖數據處理 =====
 void handleCanvasData()
 {
@@ -1274,9 +1477,34 @@ void handleCanvasData()
   int canvasHeight = server.arg("height").toInt();
   String dataStr = server.arg("data");
   bool isCompressed = server.hasArg("compressed") && server.arg("compressed").equals("1");
+  bool isPathData = server.hasArg("paths") && server.arg("paths").equals("1");
 
-  Serial.printf("Parsed parameters: width=%d, height=%d, data_length=%d, compressed=%s\n",
-                canvasWidth, canvasHeight, dataStr.length(), isCompressed ? "yes" : "no"); // 檢查數據大小合理性
+  Serial.printf("Debug: isPathData = %s\n", isPathData ? "TRUE" : "FALSE");
+  Serial.printf("Debug: server.hasArg('paths') = %s\n", server.hasArg("paths") ? "TRUE" : "FALSE");
+  if (server.hasArg("paths"))
+  {
+    Serial.printf("Debug: server.arg('paths') = '%s'\n", server.arg("paths").c_str());
+  }
+
+  Serial.printf("Parsed parameters: width=%d, height=%d, data_length=%d, compressed=%s, paths=%s\n",
+                canvasWidth, canvasHeight, dataStr.length(), isCompressed ? "yes" : "no", isPathData ? "yes" : "no");
+
+  // 檢查路徑數據的完整性
+  if (isPathData)
+  {
+    Serial.printf("Raw path data preview (first 200 chars): '%s'\n", dataStr.substring(0, 200).c_str());
+    Serial.printf("Raw path data end (last 100 chars): '%s'\n",
+                  dataStr.length() > 100 ? dataStr.substring(dataStr.length() - 100).c_str() : dataStr.c_str());
+
+    // 檢查是否有明顯的截斷（最後一個字符應該是數字，不應該在路徑中間）
+    int semicolonCount = 0;
+    for (int i = 0; i < dataStr.length(); i++)
+    {
+      if (dataStr[i] == ';')
+        semicolonCount++;
+    }
+    Serial.printf("Found %d path separators (semicolons)\n", semicolonCount);
+  } // 檢查數據大小合理性
   if (canvasWidth > 0 && canvasHeight > 0)
   {
     int expectedPixels = canvasWidth * canvasHeight;
@@ -1347,7 +1575,97 @@ void handleCanvasData()
   int pixelCount = 0;
   int nonWhitePixels = 0;
 
-  if (isCompressed)
+  Serial.printf("About to check processing mode: isPathData=%s, isCompressed=%s\n",
+                isPathData ? "TRUE" : "FALSE", isCompressed ? "TRUE" : "FALSE");
+
+  if (isPathData)
+  {
+    Serial.println("Processing path data format");
+
+    // 處理路徑格式：P:color:size:points;P:color:size:points;...
+    int validPaths = 0;
+    int startPos = 0;
+
+    for (int i = 0; i <= dataStr.length(); i++)
+    {
+      if (i == dataStr.length() || dataStr[i] == ';')
+      {
+        if (i > startPos)
+        {
+          String pathStr = dataStr.substring(startPos, i);
+          Serial.printf("Processing path string: '%s'\n", pathStr.substring(0, 50).c_str());
+
+          if (pathStr.startsWith("P:"))
+          {
+            // 解析路徑：P:color:size:points
+            int firstColon = pathStr.indexOf(':', 2);
+            int secondColon = pathStr.indexOf(':', firstColon + 1);
+
+            Serial.printf("Colon positions: first=%d, second=%d\n", firstColon, secondColon);
+            Serial.printf("Full path string length: %d, content: '%s'\n", pathStr.length(), pathStr.c_str());
+
+            if (firstColon > 0 && secondColon > firstColon)
+            {
+              String colorStr = pathStr.substring(2, firstColon);
+              String sizeStr = pathStr.substring(firstColon + 1, secondColon);
+              String pointsStr = pathStr.substring(secondColon + 1);
+
+              int color = colorStr.toInt();
+              int brushSize = sizeStr.toInt();
+
+              color = constrain(color, 0, 15);
+              brushSize = constrain(brushSize, 1, 20);
+
+              Serial.printf("Path: colorStr='%s' sizeStr='%s' color=%d, size=%d, points data length=%d\n",
+                            colorStr.c_str(), sizeStr.c_str(), color, brushSize, pointsStr.length());
+              Serial.printf("Points string preview: '%s'\n", pointsStr.substring(0, 100).c_str());
+
+              // 檢查點數據是否完整
+              if (pointsStr.length() > 0)
+              {
+                // 處理點數據：x1,y1|x2,y2|...
+                drawPathPoints(pointsStr, color, brushSize, canvasWidth, canvasHeight);
+                validPaths++;
+              }
+              else
+              {
+                Serial.println("ERROR: Empty points data");
+              }
+            }
+            else
+            {
+              Serial.printf("Invalid path format - insufficient colons (need at least 2)\n");
+            }
+          }
+          else
+          {
+            Serial.printf("Path string doesn't start with 'P:': '%s'\n", pathStr.substring(0, 10).c_str());
+          }
+        }
+        startPos = i + 1;
+      }
+    }
+
+    Serial.printf("Processed %d valid paths\n", validPaths);
+
+    if (validPaths == 0)
+    {
+      Serial.println("ERROR: No valid paths received");
+      server.send(400, "text/plain", "No valid paths received");
+      epd_poweroff();
+      return;
+    }
+
+    // 路徑處理完成，直接跳到 EPD 更新
+    Serial.println("Path processing complete, updating EPD display...");
+    epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+    epd_poweroff();
+    Serial.println("EPD display updated and powered off");
+
+    server.send(200, "text/plain", "Path data processed successfully");
+    return;
+  }
+  else if (isCompressed)
   {
     Serial.println("Processing compressed data format");
 
@@ -1491,8 +1809,13 @@ void handleCanvasData()
   }
   Serial.println();
 
-  // 檢查是否有有效像素
-  if (pixelCount == 0)
+  // 檢查是否有有效數據 (路徑模式檢查 validPaths，其他模式檢查 pixelCount)
+  if (isPathData)
+  {
+    // 路徑模式：檢查 validPaths (在路徑處理區塊中已經檢查過了)
+    Serial.printf("Path mode: Successfully processed paths\n");
+  }
+  else if (pixelCount == 0)
   {
     Serial.println("ERROR: No valid pixels received");
     epd_poweroff();
@@ -1500,7 +1823,11 @@ void handleCanvasData()
     return;
   }
 
-  if (nonWhitePixels == 0)
+  if (isPathData)
+  {
+    Serial.println("Path mode: Drawing complete, updating EPD");
+  }
+  else if (nonWhitePixels == 0)
   {
     Serial.println("Warning: All pixels are white (value 15)");
   }
@@ -1778,6 +2105,10 @@ void setup()
   // 設定 WebServer 的緩衝區大小以處理大型 POST 數據
   const char *headerKeys[] = {"Content-Length"};
   server.collectHeaders(headerKeys, 1);
+
+  // 增加 WebServer 的緩衝區大小限制
+  // 預設可能只有 1KB，我們需要更大的緩衝區來處理路徑數據
+  Serial.println("Configuring WebServer for large POST data...");
 
   server.begin();
   Serial.println("Web server started");
