@@ -33,7 +33,93 @@ WebServer server(80);
 
 // ===== Framebuffer =====
 uint8_t *framebuffer = NULL;
-const int FB_SIZE = EPD_WIDTH * EPD_HEIGHT / 2; // 2-bit grayscale
+const int FB_SIZE = EPD_WIDTH * EPD_HEIGHT / 2; // 4-bit grayscale; 除以 2 的原因：每個像素用 4 個位元儲存，1 個 byte 可以存 2 個像素，所以總像素數除以 2 就得到需要的位元組數。
+// 每個像素的 4-bit 值對應:
+// 0x0 = 黑色 (最深)
+// 0x1 = 深灰
+// 0x2 = 稍深灰
+// ...
+// 0xE = 淺灰
+// 0xF = 白色 (最淡)
+
+// ===== 遊戲狀態變數 =====
+enum GameType
+{
+  GAME_NONE,
+  GAME_DINO,
+  GAME_BALL,
+  GAME_SOKOBAN
+};
+GameType currentGame = GAME_NONE;
+
+// Chrome小恐龍遊戲狀態
+struct DinoGame
+{
+  int x = 100;
+  int y = 450; // 地面位置
+  int groundY = 450;
+  bool isJumping = false;
+  bool isCrouching = false;
+  int jumpHeight = 0;
+  int score = 0;
+  unsigned long lastUpdate = 0;
+  unsigned long lastObstacle = 0;
+  struct Obstacle
+  {
+    int x = EPD_WIDTH;
+    int y = 450;
+    int width = 20;
+    int height = 30;
+    bool active = false;
+  } obstacles[3];
+} dinoGame;
+
+// 彈球遊戲狀態
+struct BallGame
+{
+  float x = EPD_WIDTH / 2;
+  float y = EPD_HEIGHT / 2;
+  float vx = 2.0;
+  float vy = 1.5;
+  int radius = 8;
+  unsigned long lastUpdate = 0;
+} ballGame;
+
+// 推箱子遊戲狀態
+struct SokobanGame
+{
+  int playerX = 4;
+  int playerY = 3;
+  int moves = 0;
+  struct Box
+  {
+    int x, y;
+    bool onTarget = false;
+  };
+  Box boxes[2];
+  struct Target
+  {
+    int x, y;
+  };
+  Target targets[2];
+  char level[8][10] = {
+      "#########",
+      "#.......#",
+      "#..###..#",
+      "#..#.#..#",
+      "#..#.#..#",
+      "#..###..#",
+      "#.......#",
+      "#########"};
+} sokobanGame;
+
+// ===== 函數聲明 =====
+void drawDinoGame(bool forceClear = false);
+void drawBallGame(bool forceClear = false);
+void drawSokobanGame(bool forceClear = false);
+void updateDinoGame();
+void updateBallGame();
+void updateCurrentGame();
 
 // ===== 簡易 ASCII 字體 (5x7 點陣) =====
 // 基本的 ASCII 字符點陣數據
@@ -472,6 +558,10 @@ void handleRoot()
     let currentBrushSize = 3;
     let currentBrushColor = 0;
     
+    // 路徑記錄變數
+    let strokePaths = [];
+    let currentPath = null;
+    
     // 初始化 Canvas
     function initCanvas() {
       canvas = document.getElementById('drawingCanvas');
@@ -510,6 +600,13 @@ void handleRoot()
     function startDrawing(e) {
       isDrawing = true;
       [lastX, lastY] = getMousePos(e);
+      
+      // 開始新的路徑記錄
+      currentPath = {
+        color: currentBrushColor,
+        size: currentBrushSize,
+        points: [[Math.round(lastX), Math.round(lastY)]]
+      };
     }
     
     function draw(e) {
@@ -526,11 +623,22 @@ void handleRoot()
       ctx.lineTo(currentX, currentY);
       ctx.stroke();
       
+      // 記錄路徑點
+      if (currentPath) {
+        currentPath.points.push([Math.round(currentX), Math.round(currentY)]);
+      }
+      
       [lastX, lastY] = [currentX, currentY];
     }
     
     function stopDrawing() {
+      if (isDrawing && currentPath && currentPath.points.length > 1) {
+        // 完成路徑記錄
+        strokePaths.push(currentPath);
+        console.log('Path recorded:', currentPath);
+      }
       isDrawing = false;
+      currentPath = null;
     }
     
     function getMousePos(e) {
@@ -588,6 +696,83 @@ void handleRoot()
         alert('Canvas 尚未初始化');
         return;
       }
+      
+      console.log('Canvas size:', canvas.width, 'x', canvas.height);
+      console.log('Total recorded paths:', strokePaths.length);
+      
+      // 優先使用路徑格式
+      if (strokePaths.length > 0) {
+        sendStrokePaths();
+      } else {
+        console.log('No paths recorded, using pixel analysis fallback');
+        sendCanvasAsPixels();
+      }
+    }
+    
+    // 發送路徑數據 (壓縮格式)
+    function sendStrokePaths() {
+      console.log('Sending stroke paths');
+      
+      const pathStrings = [];
+      for (let i = 0; i < strokePaths.length; i++) {
+        const path = strokePaths[i];
+        const pointsStr = path.points.map(p => p[0] + ',' + p[1]).join('|');
+        const pathStr = 'P:' + path.color + ':' + path.size + ':' + pointsStr;
+        pathStrings.push(pathStr);
+      }
+      
+      const dataStr = pathStrings.join(';');
+      console.log('Path data length:', dataStr.length);
+      console.log('Path data preview:', dataStr.substring(0, 200));
+      console.log('Path data ending:', dataStr.length > 100 ? dataStr.substring(dataStr.length - 100) : dataStr);
+      console.log('Number of paths generated:', pathStrings.length);
+      
+      // 檢查每個路徑的完整性
+      for (let i = 0; i < Math.min(pathStrings.length, 3); i++) {
+        console.log('Path', i, 'sample:', pathStrings[i].substring(0, 100));
+      }
+      
+      // 檢查數據大小
+      if (dataStr.length > 50000) {
+        console.warn('Path data too large:', dataStr.length, 'chars');
+        alert('警告：路徑數據過大 (' + dataStr.length + ' 字符)，請減少繪圖內容。');
+        return;
+      }
+      
+      // 準備 POST 數據
+      const postData = 'width=' + canvas.width + '&height=' + canvas.height + '&paths=1&data=' + encodeURIComponent(dataStr);
+      console.log('POST data length:', postData.length);
+      console.log('Encoded data preview (first 200):', postData.substring(0, 200));
+      console.log('Encoded data ending (last 100):', postData.length > 100 ? postData.substring(postData.length - 100) : postData);
+      
+      // 檢查 POST 數據大小限制
+      if (postData.length > 8000) {
+        console.warn('POST data approaching ESP32 limits:', postData.length, 'chars');
+        alert('警告：POST數據接近ESP32限制 (' + postData.length + ' 字符)，可能會被截斷！');
+        // 仍然嘗試發送，但用戶已被警告
+      }
+      
+      // 發送到服務器
+      fetch('/draw/canvas', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: postData
+      })
+      .then(response => response.text())
+      .then(data => {
+        console.log('Response:', data);
+        alert('路徑數據已送出！');
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        alert('發送失敗：' + error);
+      });
+    }
+    
+    // 像素分析備用方案
+    function sendCanvasAsPixels() {
       
       // 將 canvas 轉換為圖像數據並發送到 EPD
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -936,11 +1121,178 @@ void handleRoot()
     updateBrushSize();
     updateBrushColor();
     
+    // ===== 遊戲相關變數 =====
+    let currentGame = null;
+    let gameState = {
+      dino: { x: 50, y: 400, isJumping: false, isCrouching: false, score: 0 },
+      ball: { x: 400, y: 300, vx: 3, vy: 2 },
+      sokoban: { playerX: 4, playerY: 3, boxes: [{x:3,y:3}, {x:5,y:3}], moves: 0 }
+    };
+    
+    // 切換遊戲模式
+    function switchGame(gameType) {
+      currentGame = gameType;
+      fetch('/game/switch?type=' + gameType)
+        .then(response => response.text())
+        .then(data => {
+          console.log('Game switched:', data);
+          updateGameDisplay();
+        });
+    }
+    
+    // 更新遊戲顯示資訊
+    function updateGameDisplay() {
+      const statusDiv = document.getElementById('gameStatus');
+      if (currentGame === 'dino') {
+        statusDiv.innerHTML = '<h4>🦕 Chrome小恐龍遊戲</h4><p>分數: ' + gameState.dino.score + '</p>';
+      } else if (currentGame === 'ball') {
+        statusDiv.innerHTML = '<h4>⚽ 彈球遊戲</h4><p>球的位置: (' + Math.round(gameState.ball.x) + ', ' + Math.round(gameState.ball.y) + ')</p>';
+      } else if (currentGame === 'sokoban') {
+        statusDiv.innerHTML = '<h4>📦 推箱子遊戲</h4><p>移動次數: ' + gameState.sokoban.moves + '</p>';
+      } else {
+        statusDiv.innerHTML = '<h4>請選擇一個遊戲</h4>';
+      }
+    }
+    
+    // Chrome小恐龍控制
+    function dinoJump() {
+      if (currentGame !== 'dino') return;
+      gameState.dino.isJumping = true;
+      fetch('/game/dino/jump')
+        .then(response => response.text())
+        .then(data => {
+          console.log('Dino jumped:', data);
+          setTimeout(() => { gameState.dino.isJumping = false; }, 1000);
+          updateGameDisplay();
+        });
+    }
+    
+    function dinoCrouch() {
+      if (currentGame !== 'dino') return;
+      gameState.dino.isCrouching = true;
+      fetch('/game/dino/crouch')
+        .then(response => response.text())
+        .then(data => {
+          console.log('Dino crouched:', data);
+          updateGameDisplay();
+        });
+    }
+    
+    function dinoStandUp() {
+      if (currentGame !== 'dino') return;
+      gameState.dino.isCrouching = false;
+      fetch('/game/dino/standup')
+        .then(response => response.text())
+        .then(data => {
+          console.log('Dino stood up:', data);
+          updateGameDisplay();
+        });
+    }
+    
+    // 推箱子控制
+    function moveSokoban(direction) {
+      if (currentGame !== 'sokoban') return;
+      gameState.sokoban.moves++;
+      fetch('/game/sokoban/move?dir=' + direction)
+        .then(response => response.text())
+        .then(data => {
+          console.log('Sokoban moved:', data);
+          updateGameDisplay();
+        });
+    }
+    
+    // 遊戲狀態更新（定期從伺服器獲取）
+    function updateGameState() {
+      if (currentGame) {
+        fetch('/game/state')
+          .then(response => response.json())
+          .then(data => {
+            if (data.game === currentGame) {
+              Object.assign(gameState[currentGame], data.state);
+              updateGameDisplay();
+            }
+          })
+          .catch(err => console.log('Game state update failed:', err));
+      }
+    }
+    
+    // 定期更新遊戲狀態
+    setInterval(updateGameState, 1000);
+    
     // 初始化 Canvas
     window.onload = function() {
       initCanvas();
+      updateGameDisplay();
     };
   </script>
+
+  <!-- 遊戲控制區域 -->
+  <div class="text-control">
+    <h3>🎮 EPD遊戲控制中心</h3>
+    <p>選擇遊戲後，遊戲畫面會顯示在EPD屏幕上，用手機控制操作！</p>
+    
+    <!-- 遊戲切換按鈕 -->
+    <div style="margin: 15px 0; text-align: center;">
+      <button onclick="switchGame('dino')" style="background-color: #4CAF50; color: white; padding: 15px 25px; margin: 8px; border: none; border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold;">
+        🦕 Chrome小恐龍
+      </button>
+      <button onclick="switchGame('ball')" style="background-color: #2196F3; color: white; padding: 15px 25px; margin: 8px; border: none; border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold;">
+        ⚽ 彈球遊戲
+      </button>
+      <button onclick="switchGame('sokoban')" style="background-color: #FF9800; color: white; padding: 15px 25px; margin: 8px; border: none; border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold;">
+        📦 推箱子
+      </button>
+      <button onclick="switchGame(null)" style="background-color: #f44336; color: white; padding: 15px 25px; margin: 8px; border: none; border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold;">
+        ⏹️ 停止遊戲
+      </button>
+    </div>
+
+    <!-- 遊戲狀態顯示 -->
+    <div id="gameStatus" style="margin: 20px 0; padding: 15px; background-color: #f0f0f0; border-radius: 8px; text-align: center;">
+      <h4>請選擇一個遊戲</h4>
+    </div>
+
+    <!-- Chrome小恐龍控制 -->
+    <div id="dinoControls" style="margin: 20px 0; padding: 15px; border: 2px solid #4CAF50; border-radius: 8px; background-color: #f9fff9;">
+      <h4>🦕 小恐龍控制 (在EPD上遊玩)</h4>
+      <div style="text-align: center;">
+        <button onclick="dinoJump()" style="background-color: #4CAF50; color: white; padding: 12px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
+          ⬆️ 跳躍
+        </button><br>
+        <button onmousedown="dinoCrouch()" onmouseup="dinoStandUp()" ontouchstart="dinoCrouch()" ontouchend="dinoStandUp()" style="background-color: #FF5722; color: white; padding: 12px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
+          ⬇️ 蹲下 (按住)
+        </button>
+      </div>
+      <p style="font-size: 14px; color: #666; text-align: center;">遊戲在EPD屏幕上顯示，用這些按鈕控制小恐龍避開障礙物！</p>
+    </div>
+
+    <!-- 推箱子控制 -->
+    <div id="sokobanControls" style="margin: 20px 0; padding: 15px; border: 2px solid #FF9800; border-radius: 8px; background-color: #fff9f0;">
+      <h4>📦 推箱子控制 (在EPD上遊玩)</h4>
+      <div style="text-align: center;">
+        <button onclick="moveSokoban('up')" style="background-color: #FF9800; color: white; padding: 12px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
+          ⬆️ 上
+        </button><br>
+        <button onclick="moveSokoban('left')" style="background-color: #FF9800; color: white; padding: 12px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
+          ⬅️ 左
+        </button>
+        <button onclick="moveSokoban('down')" style="background-color: #FF9800; color: white; padding: 12px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
+          ⬇️ 下
+        </button>
+        <button onclick="moveSokoban('right')" style="background-color: #FF9800; color: white; padding: 12px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
+          ➡️ 右
+        </button>
+      </div>
+      <p style="font-size: 14px; color: #666; text-align: center;">把所有箱子推到目標位置就過關！</p>
+    </div>
+
+    <!-- 彈球遊戲資訊 -->
+    <div id="ballGameInfo" style="margin: 20px 0; padding: 15px; border: 2px solid #2196F3; border-radius: 8px; background-color: #f0f8ff;">
+      <h4>⚽ 彈球遊戲 (在EPD上遊玩)</h4>
+      <p style="text-align: center; color: #666;">彈球會自動在EPD屏幕上的邊框內反彈，無需手動控制</p>
+      <p style="text-align: center; font-size: 14px; color: #666;">享受視覺效果即可！</p>
+    </div>
+  </div>
 </body>
 </html>
 )rawliteral";
@@ -1249,6 +1601,110 @@ void handleDrawRectAdvanced()
   server.send(200, "text/plain", response);
 }
 
+// ===== 路徑繪製輔助函數 =====
+void drawPathPoints(String pointsStr, int color, int brushSize, int canvasWidth, int canvasHeight)
+{
+  Serial.printf("Drawing path: color=%d, size=%d, points='%s'\n", color, brushSize, pointsStr.substring(0, 50).c_str());
+
+  // 解析點數據：x1,y1|x2,y2|...
+  int pointCount = 0;
+  int lastX = -1, lastY = -1;
+  int startPos = 0;
+
+  for (int i = 0; i <= pointsStr.length(); i++)
+  {
+    if (i == pointsStr.length() || pointsStr[i] == '|')
+    {
+      if (i > startPos)
+      {
+        String pointStr = pointsStr.substring(startPos, i);
+        int commaPos = pointStr.indexOf(',');
+
+        if (commaPos > 0)
+        {
+          int x = pointStr.substring(0, commaPos).toInt();
+          int y = pointStr.substring(commaPos + 1).toInt();
+
+          // 映射從Canvas座標到EPD座標
+          int epdX = (x * EPD_WIDTH) / canvasWidth;
+          int epdY = (y * EPD_HEIGHT) / canvasHeight;
+
+          // 確保座標在有效範圍內
+          epdX = constrain(epdX, 0, EPD_WIDTH - 1);
+          epdY = constrain(epdY, 0, EPD_HEIGHT - 1);
+
+          if (pointCount == 0)
+          {
+            // 第一個點，只記錄位置
+            lastX = epdX;
+            lastY = epdY;
+          }
+          else
+          {
+            // 從上一個點畫線到當前點
+            drawLine(lastX, lastY, epdX, epdY, color, brushSize);
+            lastX = epdX;
+            lastY = epdY;
+          }
+
+          pointCount++;
+        }
+      }
+      startPos = i + 1;
+    }
+  }
+
+  Serial.printf("Drew path with %d points\n", pointCount);
+}
+
+// 使用 Bresenham 算法繪製線條
+void drawLine(int x0, int y0, int x1, int y1, int color, int thickness)
+{
+  int dx = abs(x1 - x0);
+  int dy = abs(y1 - y0);
+  int sx = (x0 < x1) ? 1 : -1;
+  int sy = (y0 < y1) ? 1 : -1;
+  int err = dx - dy;
+
+  int x = x0;
+  int y = y0;
+
+  while (true)
+  {
+    // 繪製粗線條（以當前點為中心的小圓形）
+    for (int dx = -thickness / 2; dx <= thickness / 2; dx++)
+    {
+      for (int dy = -thickness / 2; dy <= thickness / 2; dy++)
+      {
+        if (dx * dx + dy * dy <= (thickness * thickness) / 4)
+        {
+          int px = x + dx;
+          int py = y + dy;
+          if (px >= 0 && px < EPD_WIDTH && py >= 0 && py < EPD_HEIGHT)
+          {
+            epd_fill_rect(px, py, 1, 1, color, framebuffer);
+          }
+        }
+      }
+    }
+
+    if (x == x1 && y == y1)
+      break;
+
+    int e2 = 2 * err;
+    if (e2 > -dy)
+    {
+      err -= dy;
+      x += sx;
+    }
+    if (e2 < dx)
+    {
+      err += dx;
+      y += sy;
+    }
+  }
+}
+
 // ===== Canvas 繪圖數據處理 =====
 void handleCanvasData()
 {
@@ -1274,9 +1730,34 @@ void handleCanvasData()
   int canvasHeight = server.arg("height").toInt();
   String dataStr = server.arg("data");
   bool isCompressed = server.hasArg("compressed") && server.arg("compressed").equals("1");
+  bool isPathData = server.hasArg("paths") && server.arg("paths").equals("1");
 
-  Serial.printf("Parsed parameters: width=%d, height=%d, data_length=%d, compressed=%s\n",
-                canvasWidth, canvasHeight, dataStr.length(), isCompressed ? "yes" : "no"); // 檢查數據大小合理性
+  Serial.printf("Debug: isPathData = %s\n", isPathData ? "TRUE" : "FALSE");
+  Serial.printf("Debug: server.hasArg('paths') = %s\n", server.hasArg("paths") ? "TRUE" : "FALSE");
+  if (server.hasArg("paths"))
+  {
+    Serial.printf("Debug: server.arg('paths') = '%s'\n", server.arg("paths").c_str());
+  }
+
+  Serial.printf("Parsed parameters: width=%d, height=%d, data_length=%d, compressed=%s, paths=%s\n",
+                canvasWidth, canvasHeight, dataStr.length(), isCompressed ? "yes" : "no", isPathData ? "yes" : "no");
+
+  // 檢查路徑數據的完整性
+  if (isPathData)
+  {
+    Serial.printf("Raw path data preview (first 200 chars): '%s'\n", dataStr.substring(0, 200).c_str());
+    Serial.printf("Raw path data end (last 100 chars): '%s'\n",
+                  dataStr.length() > 100 ? dataStr.substring(dataStr.length() - 100).c_str() : dataStr.c_str());
+
+    // 檢查是否有明顯的截斷（最後一個字符應該是數字，不應該在路徑中間）
+    int semicolonCount = 0;
+    for (int i = 0; i < dataStr.length(); i++)
+    {
+      if (dataStr[i] == ';')
+        semicolonCount++;
+    }
+    Serial.printf("Found %d path separators (semicolons)\n", semicolonCount);
+  } // 檢查數據大小合理性
   if (canvasWidth > 0 && canvasHeight > 0)
   {
     int expectedPixels = canvasWidth * canvasHeight;
@@ -1347,7 +1828,97 @@ void handleCanvasData()
   int pixelCount = 0;
   int nonWhitePixels = 0;
 
-  if (isCompressed)
+  Serial.printf("About to check processing mode: isPathData=%s, isCompressed=%s\n",
+                isPathData ? "TRUE" : "FALSE", isCompressed ? "TRUE" : "FALSE");
+
+  if (isPathData)
+  {
+    Serial.println("Processing path data format");
+
+    // 處理路徑格式：P:color:size:points;P:color:size:points;...
+    int validPaths = 0;
+    int startPos = 0;
+
+    for (int i = 0; i <= dataStr.length(); i++)
+    {
+      if (i == dataStr.length() || dataStr[i] == ';')
+      {
+        if (i > startPos)
+        {
+          String pathStr = dataStr.substring(startPos, i);
+          Serial.printf("Processing path string: '%s'\n", pathStr.substring(0, 50).c_str());
+
+          if (pathStr.startsWith("P:"))
+          {
+            // 解析路徑：P:color:size:points
+            int firstColon = pathStr.indexOf(':', 2);
+            int secondColon = pathStr.indexOf(':', firstColon + 1);
+
+            Serial.printf("Colon positions: first=%d, second=%d\n", firstColon, secondColon);
+            Serial.printf("Full path string length: %d, content: '%s'\n", pathStr.length(), pathStr.c_str());
+
+            if (firstColon > 0 && secondColon > firstColon)
+            {
+              String colorStr = pathStr.substring(2, firstColon);
+              String sizeStr = pathStr.substring(firstColon + 1, secondColon);
+              String pointsStr = pathStr.substring(secondColon + 1);
+
+              int color = colorStr.toInt();
+              int brushSize = sizeStr.toInt();
+
+              color = constrain(color, 0, 15);
+              brushSize = constrain(brushSize, 1, 20);
+
+              Serial.printf("Path: colorStr='%s' sizeStr='%s' color=%d, size=%d, points data length=%d\n",
+                            colorStr.c_str(), sizeStr.c_str(), color, brushSize, pointsStr.length());
+              Serial.printf("Points string preview: '%s'\n", pointsStr.substring(0, 100).c_str());
+
+              // 檢查點數據是否完整
+              if (pointsStr.length() > 0)
+              {
+                // 處理點數據：x1,y1|x2,y2|...
+                drawPathPoints(pointsStr, color, brushSize, canvasWidth, canvasHeight);
+                validPaths++;
+              }
+              else
+              {
+                Serial.println("ERROR: Empty points data");
+              }
+            }
+            else
+            {
+              Serial.printf("Invalid path format - insufficient colons (need at least 2)\n");
+            }
+          }
+          else
+          {
+            Serial.printf("Path string doesn't start with 'P:': '%s'\n", pathStr.substring(0, 10).c_str());
+          }
+        }
+        startPos = i + 1;
+      }
+    }
+
+    Serial.printf("Processed %d valid paths\n", validPaths);
+
+    if (validPaths == 0)
+    {
+      Serial.println("ERROR: No valid paths received");
+      server.send(400, "text/plain", "No valid paths received");
+      epd_poweroff();
+      return;
+    }
+
+    // 路徑處理完成，直接跳到 EPD 更新
+    Serial.println("Path processing complete, updating EPD display...");
+    epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+    epd_poweroff();
+    Serial.println("EPD display updated and powered off");
+
+    server.send(200, "text/plain", "Path data processed successfully");
+    return;
+  }
+  else if (isCompressed)
   {
     Serial.println("Processing compressed data format");
 
@@ -1491,8 +2062,13 @@ void handleCanvasData()
   }
   Serial.println();
 
-  // 檢查是否有有效像素
-  if (pixelCount == 0)
+  // 檢查是否有有效數據 (路徑模式檢查 validPaths，其他模式檢查 pixelCount)
+  if (isPathData)
+  {
+    // 路徑模式：檢查 validPaths (在路徑處理區塊中已經檢查過了)
+    Serial.printf("Path mode: Successfully processed paths\n");
+  }
+  else if (pixelCount == 0)
   {
     Serial.println("ERROR: No valid pixels received");
     epd_poweroff();
@@ -1500,7 +2076,11 @@ void handleCanvasData()
     return;
   }
 
-  if (nonWhitePixels == 0)
+  if (isPathData)
+  {
+    Serial.println("Path mode: Drawing complete, updating EPD");
+  }
+  else if (nonWhitePixels == 0)
   {
     Serial.println("Warning: All pixels are white (value 15)");
   }
@@ -1697,6 +2277,522 @@ void notFound()
   server.send(404, "text/plain", "Not found");
 }
 
+// ===== 遊戲處理函數 =====
+
+// 切換遊戲模式
+void handleGameSwitch()
+{
+  String gameType = server.arg("type");
+  Serial.printf("Switching to game: %s\n", gameType.c_str());
+
+  if (gameType == "dino")
+  {
+    currentGame = GAME_DINO;
+    // 重置恐龍遊戲
+    dinoGame.x = 100;
+    dinoGame.y = dinoGame.groundY;
+    dinoGame.isJumping = false;
+    dinoGame.isCrouching = false;
+    dinoGame.jumpHeight = 0;
+    dinoGame.score = 0;
+    for (int i = 0; i < 3; i++)
+    {
+      dinoGame.obstacles[i].active = false;
+    }
+    drawDinoGame(true); // 遊戲切換時強制清除
+  }
+  else if (gameType == "ball")
+  {
+    currentGame = GAME_BALL;
+    // 重置彈球遊戲
+    ballGame.x = EPD_WIDTH / 2;
+    ballGame.y = EPD_HEIGHT / 2;
+    ballGame.vx = 2.0;
+    ballGame.vy = 1.5;
+    drawBallGame(true); // 遊戲切換時強制清除
+  }
+  else if (gameType == "sokoban")
+  {
+    currentGame = GAME_SOKOBAN;
+    // 重置推箱子遊戲
+    sokobanGame.playerX = 4;
+    sokobanGame.playerY = 3;
+    sokobanGame.moves = 0;
+    sokobanGame.boxes[0].x = 3;
+    sokobanGame.boxes[0].y = 3;
+    sokobanGame.boxes[0].onTarget = false;
+    sokobanGame.boxes[1].x = 5;
+    sokobanGame.boxes[1].y = 3;
+    sokobanGame.boxes[1].onTarget = false;
+    drawSokobanGame(true); // 遊戲切換時強制清除
+  }
+  else
+  {
+    currentGame = GAME_NONE;
+    if (framebuffer)
+    {
+      memset(framebuffer, 0xFF, FB_SIZE);
+      epd_poweron();
+      epd_clear();
+      draw_ip_simple(10, 10, "Game Stopped", 0, framebuffer);
+      epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+      epd_poweroff();
+    }
+  }
+
+  server.send(200, "text/plain", "Game switched to " + gameType);
+}
+
+// Chrome小恐龍遊戲控制
+void handleDinoJump()
+{
+  if (currentGame != GAME_DINO)
+  {
+    server.send(400, "text/plain", "Not in dino game");
+    return;
+  }
+
+  if (!dinoGame.isJumping && !dinoGame.isCrouching)
+  {
+    dinoGame.isJumping = true;
+    dinoGame.jumpHeight = 60; // 跳躍高度
+    Serial.println("Dino jumping!");
+    drawDinoGame(true); // 手動操作時強制清除
+  }
+
+  server.send(200, "text/plain", "Dino jumped");
+}
+
+void handleDinoCrouch()
+{
+  if (currentGame != GAME_DINO)
+  {
+    server.send(400, "text/plain", "Not in dino game");
+    return;
+  }
+
+  dinoGame.isCrouching = true;
+  Serial.println("Dino crouching!");
+  drawDinoGame(true); // 手動操作時強制清除
+
+  server.send(200, "text/plain", "Dino crouched");
+}
+
+void handleDinoStandUp()
+{
+  if (currentGame != GAME_DINO)
+  {
+    server.send(400, "text/plain", "Not in dino game");
+    return;
+  }
+
+  dinoGame.isCrouching = false;
+  Serial.println("Dino standing up!");
+  drawDinoGame(true); // 手動操作時強制清除
+
+  server.send(200, "text/plain", "Dino stood up");
+}
+
+// 推箱子遊戲控制
+void handleSokobanMove()
+{
+  if (currentGame != GAME_SOKOBAN)
+  {
+    server.send(400, "text/plain", "Not in sokoban game");
+    return;
+  }
+
+  String direction = server.arg("dir");
+  int newX = sokobanGame.playerX;
+  int newY = sokobanGame.playerY;
+
+  if (direction == "up")
+    newY--;
+  else if (direction == "down")
+    newY++;
+  else if (direction == "left")
+    newX--;
+  else if (direction == "right")
+    newX++;
+
+  // 檢查邊界和牆壁
+  if (newX >= 0 && newX < 9 && newY >= 0 && newY < 8 &&
+      sokobanGame.level[newY][newX] != '#')
+  {
+
+    // 檢查是否推箱子
+    bool boxMoved = false;
+    for (int i = 0; i < 2; i++)
+    {
+      if (sokobanGame.boxes[i].x == newX && sokobanGame.boxes[i].y == newY)
+      {
+        int boxNewX = newX + (newX - sokobanGame.playerX);
+        int boxNewY = newY + (newY - sokobanGame.playerY);
+
+        // 檢查箱子能否移動
+        if (boxNewX >= 0 && boxNewX < 9 && boxNewY >= 0 && boxNewY < 8 &&
+            sokobanGame.level[boxNewY][boxNewX] != '#')
+        {
+
+          // 檢查目標位置是否有其他箱子
+          bool blocked = false;
+          for (int j = 0; j < 2; j++)
+          {
+            if (j != i && sokobanGame.boxes[j].x == boxNewX && sokobanGame.boxes[j].y == boxNewY)
+            {
+              blocked = true;
+              break;
+            }
+          }
+
+          if (!blocked)
+          {
+            sokobanGame.boxes[i].x = boxNewX;
+            sokobanGame.boxes[i].y = boxNewY;
+            boxMoved = true;
+          }
+        }
+
+        if (!boxMoved)
+        {
+          server.send(200, "text/plain", "Cannot push box");
+          return;
+        }
+        break;
+      }
+    }
+
+    sokobanGame.playerX = newX;
+    sokobanGame.playerY = newY;
+    sokobanGame.moves++;
+
+    Serial.printf("Sokoban moved %s to (%d,%d)\n", direction.c_str(), newX, newY);
+    drawSokobanGame(true); // 手動操作時強制清除
+  }
+
+  server.send(200, "text/plain", "Player moved " + direction);
+}
+
+// 遊戲狀態查詢
+void handleGameState()
+{
+  String json = "{";
+
+  if (currentGame == GAME_DINO)
+  {
+    json += "\"game\":\"dino\",\"state\":{";
+    json += "\"x\":" + String(dinoGame.x) + ",";
+    json += "\"y\":" + String(dinoGame.y) + ",";
+    json += "\"isJumping\":" + String(dinoGame.isJumping ? "true" : "false") + ",";
+    json += "\"isCrouching\":" + String(dinoGame.isCrouching ? "true" : "false") + ",";
+    json += "\"score\":" + String(dinoGame.score);
+    json += "}";
+  }
+  else if (currentGame == GAME_BALL)
+  {
+    json += "\"game\":\"ball\",\"state\":{";
+    json += "\"x\":" + String(ballGame.x) + ",";
+    json += "\"y\":" + String(ballGame.y);
+    json += "}";
+  }
+  else if (currentGame == GAME_SOKOBAN)
+  {
+    json += "\"game\":\"sokoban\",\"state\":{";
+    json += "\"playerX\":" + String(sokobanGame.playerX) + ",";
+    json += "\"playerY\":" + String(sokobanGame.playerY) + ",";
+    json += "\"moves\":" + String(sokobanGame.moves);
+    json += "}";
+  }
+  else
+  {
+    json += "\"game\":\"none\",\"state\":{}";
+  }
+
+  json += "}";
+
+  server.send(200, "application/json", json);
+}
+
+// ===== 遊戲繪製函數 =====
+
+void drawDinoGame(bool forceClear)
+{
+  if (!framebuffer)
+    return;
+
+  epd_poweron();
+
+  // 清空framebuffer
+  memset(framebuffer, 0xFF, FB_SIZE);
+
+  // 只在需要時清除EPD（手動操作或遊戲重置時）
+  if (forceClear)
+  {
+    epd_clear();
+  }
+
+  // 繪製地面
+  epd_fill_rect(0, dinoGame.groundY + 20, EPD_WIDTH, 5, 0, framebuffer);
+
+  // 計算恐龍位置
+  int dinoY = dinoGame.y;
+  if (dinoGame.isJumping)
+  {
+    dinoY = dinoGame.groundY - dinoGame.jumpHeight;
+  }
+
+  // 繪製恐龍
+  int dinoHeight = dinoGame.isCrouching ? 20 : 40;
+  int dinoWidth = 30;
+  epd_fill_rect(dinoGame.x, dinoY, dinoWidth, dinoHeight, 0, framebuffer);
+
+  // 繪製障礙物
+  for (int i = 0; i < 3; i++)
+  {
+    if (dinoGame.obstacles[i].active)
+    {
+      epd_fill_rect(dinoGame.obstacles[i].x, dinoGame.obstacles[i].y,
+                    dinoGame.obstacles[i].width, dinoGame.obstacles[i].height,
+                    8, framebuffer); // 灰色障礙物
+    }
+  }
+
+  // 顯示分數
+  String scoreText = "Score: " + String(dinoGame.score);
+  draw_ip_simple(10, 10, scoreText.c_str(), 0, framebuffer);
+
+  // 顯示遊戲狀態
+  if (dinoGame.isJumping)
+  {
+    draw_ip_simple(10, 30, "JUMPING!", 0, framebuffer);
+  }
+  else if (dinoGame.isCrouching)
+  {
+    draw_ip_simple(10, 30, "CROUCHING", 0, framebuffer);
+  }
+
+  epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  epd_poweroff();
+}
+
+void drawBallGame(bool forceClear)
+{
+  if (!framebuffer)
+    return;
+
+  epd_poweron();
+
+  // 清空framebuffer
+  memset(framebuffer, 0xFF, FB_SIZE);
+
+  // 只在需要時清除EPD
+  if (forceClear)
+  {
+    epd_clear();
+  }
+
+  // 繪製邊框
+  epd_draw_rect(5, 5, EPD_WIDTH - 10, EPD_HEIGHT - 10, 0, framebuffer);
+
+  // 繪製球
+  epd_fill_circle((int)ballGame.x, (int)ballGame.y, ballGame.radius, 0, framebuffer);
+
+  // 顯示位置資訊
+  String posText = "Ball: (" + String((int)ballGame.x) + "," + String((int)ballGame.y) + ")";
+  draw_ip_simple(10, 10, posText.c_str(), 0, framebuffer);
+  draw_ip_simple(10, 25, "Ball Game Running", 0, framebuffer);
+
+  epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  epd_poweroff();
+}
+
+void drawSokobanGame(bool forceClear)
+{
+  if (!framebuffer)
+    return;
+
+  epd_poweron();
+
+  // 清空framebuffer
+  memset(framebuffer, 0xFF, FB_SIZE);
+
+  // 只在需要時清除EPD
+  if (forceClear)
+  {
+    epd_clear();
+  }
+
+  int cellSize = 40;
+  int offsetX = 100;
+  int offsetY = 50;
+
+  // 繪製地圖
+  for (int y = 0; y < 8; y++)
+  {
+    for (int x = 0; x < 9; x++)
+    {
+      int pixelX = offsetX + x * cellSize;
+      int pixelY = offsetY + y * cellSize;
+
+      if (sokobanGame.level[y][x] == '#')
+      {
+        epd_fill_rect(pixelX, pixelY, cellSize, cellSize, 0, framebuffer); // 牆壁
+      }
+    }
+  }
+
+  // 繪製目標點
+  for (int i = 0; i < 2; i++)
+  {
+    int pixelX = offsetX + sokobanGame.targets[i].x * cellSize + 5;
+    int pixelY = offsetY + sokobanGame.targets[i].y * cellSize + 5;
+    epd_fill_rect(pixelX, pixelY, cellSize - 10, cellSize - 10, 8, framebuffer); // 灰色目標
+  }
+
+  // 繪製箱子
+  for (int i = 0; i < 2; i++)
+  {
+    int pixelX = offsetX + sokobanGame.boxes[i].x * cellSize + 3;
+    int pixelY = offsetY + sokobanGame.boxes[i].y * cellSize + 3;
+    epd_fill_rect(pixelX, pixelY, cellSize - 6, cellSize - 6, 4, framebuffer); // 深灰色箱子
+  }
+
+  // 繪製玩家
+  int playerPixelX = offsetX + sokobanGame.playerX * cellSize + 8;
+  int playerPixelY = offsetY + sokobanGame.playerY * cellSize + 8;
+  epd_fill_rect(playerPixelX, playerPixelY, cellSize - 16, cellSize - 16, 0, framebuffer); // 黑色玩家
+
+  // 顯示移動次數
+  String movesText = "Moves: " + String(sokobanGame.moves);
+  draw_ip_simple(10, 10, movesText.c_str(), 0, framebuffer);
+  draw_ip_simple(10, 25, "Sokoban Game", 0, framebuffer);
+
+  epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  epd_poweroff();
+}
+
+// ===== 遊戲更新邏輯 =====
+
+void updateDinoGame()
+{
+  unsigned long now = millis();
+  if (now - dinoGame.lastUpdate < 100)
+    return; // 更新頻率限制
+  dinoGame.lastUpdate = now;
+
+  // 更新跳躍
+  if (dinoGame.isJumping)
+  {
+    dinoGame.jumpHeight -= 3;
+    if (dinoGame.jumpHeight <= 0)
+    {
+      dinoGame.jumpHeight = 0;
+      dinoGame.isJumping = false;
+    }
+  }
+
+  // 生成障礙物
+  if (now - dinoGame.lastObstacle > 3000)
+  { // 每3秒生成一個障礙物
+    for (int i = 0; i < 3; i++)
+    {
+      if (!dinoGame.obstacles[i].active)
+      {
+        dinoGame.obstacles[i].x = EPD_WIDTH;
+        dinoGame.obstacles[i].y = dinoGame.groundY - 30;
+        dinoGame.obstacles[i].active = true;
+        dinoGame.lastObstacle = now;
+        break;
+      }
+    }
+  }
+
+  // 更新障礙物位置
+  for (int i = 0; i < 3; i++)
+  {
+    if (dinoGame.obstacles[i].active)
+    {
+      dinoGame.obstacles[i].x -= 5;
+      if (dinoGame.obstacles[i].x < -dinoGame.obstacles[i].width)
+      {
+        dinoGame.obstacles[i].active = false;
+        dinoGame.score += 10;
+      }
+    }
+  }
+
+  // 碰撞檢測
+  int dinoY = dinoGame.isJumping ? dinoGame.groundY - dinoGame.jumpHeight : dinoGame.y;
+  int dinoHeight = dinoGame.isCrouching ? 20 : 40;
+
+  for (int i = 0; i < 3; i++)
+  {
+    if (dinoGame.obstacles[i].active)
+    {
+      if (dinoGame.x < dinoGame.obstacles[i].x + dinoGame.obstacles[i].width &&
+          dinoGame.x + 30 > dinoGame.obstacles[i].x &&
+          dinoY < dinoGame.obstacles[i].y + dinoGame.obstacles[i].height &&
+          dinoY + dinoHeight > dinoGame.obstacles[i].y)
+      {
+        // 遊戲結束
+        Serial.println("Game Over! Score: " + String(dinoGame.score));
+        // 重置遊戲
+        dinoGame.score = 0;
+        for (int j = 0; j < 3; j++)
+        {
+          dinoGame.obstacles[j].active = false;
+        }
+      }
+    }
+  }
+}
+
+void updateBallGame()
+{
+  unsigned long now = millis();
+  if (now - ballGame.lastUpdate < 50)
+    return; // 更新頻率限制
+  ballGame.lastUpdate = now;
+
+  // 更新球的位置
+  ballGame.x += ballGame.vx;
+  ballGame.y += ballGame.vy;
+
+  // 邊界碰撞檢測
+  if (ballGame.x - ballGame.radius <= 5 || ballGame.x + ballGame.radius >= EPD_WIDTH - 5)
+  {
+    ballGame.vx = -ballGame.vx;
+    ballGame.x = constrain(ballGame.x, 5 + ballGame.radius, EPD_WIDTH - 5 - ballGame.radius);
+  }
+  if (ballGame.y - ballGame.radius <= 5 || ballGame.y + ballGame.radius >= EPD_HEIGHT - 5)
+  {
+    ballGame.vy = -ballGame.vy;
+    ballGame.y = constrain(ballGame.y, 5 + ballGame.radius, EPD_HEIGHT - 5 - ballGame.radius);
+  }
+}
+
+void updateCurrentGame()
+{
+  static unsigned long lastGameUpdate = 0;
+  unsigned long now = millis();
+
+  // 限制遊戲更新頻率（每1000ms更新一次畫面，降低EPD負荷）
+  if (now - lastGameUpdate < 1000)
+    return;
+  lastGameUpdate = now;
+
+  if (currentGame == GAME_DINO)
+  {
+    updateDinoGame();
+    drawDinoGame(false); // 自動更新不強制清除
+  }
+  else if (currentGame == GAME_BALL)
+  {
+    updateBallGame();
+    drawBallGame(false); // 自動更新不強制清除
+  }
+}
+
 // ===== Setup =====
 void setup()
 {
@@ -1704,6 +2800,18 @@ void setup()
   delay(2000); // 增加延遲確保序列埠穩定
 
   Serial.println("Starting EPD Controller...");
+
+  // 初始化遊戲狀態
+  sokobanGame.boxes[0].x = 3;
+  sokobanGame.boxes[0].y = 3;
+  sokobanGame.boxes[0].onTarget = false;
+  sokobanGame.boxes[1].x = 5;
+  sokobanGame.boxes[1].y = 3;
+  sokobanGame.boxes[1].onTarget = false;
+  sokobanGame.targets[0].x = 2;
+  sokobanGame.targets[0].y = 2;
+  sokobanGame.targets[1].x = 6;
+  sokobanGame.targets[1].y = 2;
 
   // 初始化 framebuffer
   Serial.println("Initializing framebuffer...");
@@ -1773,11 +2881,23 @@ void setup()
   server.on("/upload", HTTP_POST, []()
             { server.send(200); }, handleUpload);
 
+  // 遊戲控制路由
+  server.on("/game/switch", HTTP_GET, handleGameSwitch);
+  server.on("/game/dino/jump", HTTP_GET, handleDinoJump);
+  server.on("/game/dino/crouch", HTTP_GET, handleDinoCrouch);
+  server.on("/game/dino/standup", HTTP_GET, handleDinoStandUp);
+  server.on("/game/sokoban/move", HTTP_GET, handleSokobanMove);
+  server.on("/game/state", HTTP_GET, handleGameState);
+
   server.onNotFound(notFound);
 
   // 設定 WebServer 的緩衝區大小以處理大型 POST 數據
   const char *headerKeys[] = {"Content-Length"};
   server.collectHeaders(headerKeys, 1);
+
+  // 增加 WebServer 的緩衝區大小限制
+  // 預設可能只有 1KB，我們需要更大的緩衝區來處理路徑數據
+  Serial.println("Configuring WebServer for large POST data...");
 
   server.begin();
   Serial.println("Web server started");
@@ -1793,11 +2913,18 @@ void loop()
 {
   server.handleClient();
 
+  // 更新當前遊戲
+  updateCurrentGame();
+
   // 每10秒輸出一次心跳信號，確認程式在運行
   static unsigned long lastHeartbeat = 0;
   if (millis() - lastHeartbeat > 10000)
   {
     Serial.println("System running... Waiting for connections");
+    if (currentGame != GAME_NONE)
+    {
+      Serial.printf("Current game: %d\n", currentGame);
+    }
     lastHeartbeat = millis();
   }
 
