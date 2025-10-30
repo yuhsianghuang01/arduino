@@ -1315,7 +1315,236 @@ void handleRoot()
     window.onload = function() {
       initCanvas();
       updateGameDisplay();
+      initImageConverter();
     };
+    
+    // ===== 圖片轉換器功能 =====
+    let currentWidth = 480;
+    let currentHeight = 800;
+    let imageCanvas = null;
+    let imageCtx = null;
+    let currentImageData = null;
+    
+    function initImageConverter() {
+      imageCanvas = document.getElementById('imageCanvas');
+      imageCtx = imageCanvas.getContext('2d');
+      
+      // 設置初始畫布
+      resetImageCanvas();
+      
+      // 綁定事件
+      document.getElementById('imageInput').addEventListener('change', handleImageUpload);
+      document.getElementById('widthSelect').addEventListener('change', updateCanvasSize);
+      document.getElementById('heightSelect').addEventListener('change', updateCanvasSize);
+      document.getElementById('converterDataTextarea').addEventListener('dblclick', copyConverterData);
+    }
+    
+    function updateCanvasSize() {
+      currentWidth = parseInt(document.getElementById('widthSelect').value);
+      currentHeight = parseInt(document.getElementById('heightSelect').value);
+      
+      // 更新畫布尺寸
+      imageCanvas.width = currentWidth;
+      imageCanvas.height = currentHeight;
+      
+      // 更新標籤
+      const totalPixels = currentWidth * currentHeight;
+      document.getElementById('dataLabel').textContent = 
+        `灰階數據 (${currentWidth}×${currentHeight} = ${totalPixels.toLocaleString()} 個值)：`;
+      
+      // 重置畫布
+      resetImageCanvas();
+      
+      // 更新預設按鈕狀態
+      updatePresetButtons();
+    }
+    
+    function setPresetSize(width, height) {
+      document.getElementById('widthSelect').value = width;
+      document.getElementById('heightSelect').value = height;
+      updateCanvasSize();
+    }
+    
+    function updatePresetButtons() {
+      const presetButtons = document.querySelectorAll('.preset-btn');
+      presetButtons.forEach(btn => btn.classList.remove('active'));
+      
+      // 檢查是否符合預設尺寸
+      if (currentWidth === 64 && currentHeight === 64) {
+        presetButtons[0].classList.add('active');
+      } else if (currentWidth === 128 && currentHeight === 128) {
+        presetButtons[1].classList.add('active');
+      } else if (currentWidth === 320 && currentHeight === 240) {
+        presetButtons[2].classList.add('active');
+      } else if (currentWidth === 480 && currentHeight === 800) {
+        presetButtons[3].classList.add('active');
+      } else if (currentWidth === 540 && currentHeight === 960) {
+        presetButtons[4].classList.add('active');
+      } else if (currentWidth === 800 && currentHeight === 600) {
+        presetButtons[5].classList.add('active');
+      }
+    }
+    
+    function handleImageUpload(e) {
+      const file = e.target.files[0];
+      if (file) {
+        processImage(file);
+      }
+    }
+    
+    function processImage(file) {
+      const reader = new FileReader();
+      
+      reader.onload = function(e) {
+        const img = new Image();
+        
+        img.onload = function() {
+          // 清除畫布
+          resetImageCanvas();
+          
+          // 繪製並縮放圖片到指定尺寸
+          imageCtx.drawImage(img, 0, 0, currentWidth, currentHeight);
+          
+          // 獲取圖片數據
+          const imageData = imageCtx.getImageData(0, 0, currentWidth, currentHeight);
+          
+          // 轉換為灰階
+          const grayscaleData = convertToGrayscale(imageData);
+          
+          // 重新繪製灰階圖片
+          drawGrayscaleImageToCanvas(grayscaleData);
+          
+          // 轉換為數據格式
+          const dataString = grayscaleData.join(',');
+          document.getElementById('converterDataTextarea').value = dataString;
+          currentImageData = dataString;
+          
+          // 更新資訊
+          document.getElementById('canvasInfo').innerHTML = 
+            `<strong>圖片資訊：</strong><br>
+             原始尺寸: ${img.width} × ${img.height}<br>
+             轉換尺寸: ${currentWidth} × ${currentHeight}<br>
+             數據點數: ${grayscaleData.length.toLocaleString()}<br>
+             檔案大小: ${(file.size / 1024).toFixed(1)} KB`;
+          
+          showToast('圖片轉換完成！');
+        };
+        
+        img.src = e.target.result;
+      };
+      
+      reader.readAsDataURL(file);
+    }
+    
+    function convertToGrayscale(imageData) {
+      const data = imageData.data;
+      const grayscaleData = [];
+      
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        
+        // 使用標準灰階轉換公式
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        
+        // 轉換為 0-15 範圍 (EPD 4-bit 灰階)
+        const grayscaleValue = Math.round((gray / 255) * 15);
+        grayscaleData.push(grayscaleValue);
+      }
+      
+      return grayscaleData;
+    }
+    
+    function drawGrayscaleImageToCanvas(grayscaleData) {
+      const imageData = imageCtx.createImageData(currentWidth, currentHeight);
+      const data = imageData.data;
+      
+      for (let i = 0; i < grayscaleData.length; i++) {
+        const grayValue = Math.round((grayscaleData[i] / 15) * 255);
+        const pixelIndex = i * 4;
+        
+        data[pixelIndex] = grayValue;     // R
+        data[pixelIndex + 1] = grayValue; // G
+        data[pixelIndex + 2] = grayValue; // B
+        data[pixelIndex + 3] = 255;       // A
+      }
+      
+      imageCtx.putImageData(imageData, 0, 0);
+    }
+    
+    function resetImageCanvas() {
+      imageCtx.fillStyle = '#ffffff';
+      imageCtx.fillRect(0, 0, currentWidth, currentHeight);
+    }
+    
+    function copyConverterData() {
+      const textarea = document.getElementById('converterDataTextarea');
+      textarea.select();
+      textarea.setSelectionRange(0, 99999);
+      
+      try {
+        document.execCommand('copy');
+        showToast('數據已複製到剪貼簿！');
+      } catch (err) {
+        navigator.clipboard.writeText(textarea.value).then(() => {
+          showToast('數據已複製到剪貼簿！');
+        }).catch(() => {
+          showToast('複製失敗，請手動選取複製');
+        });
+      }
+    }
+    
+    function resetConverter() {
+      document.getElementById('converterDataTextarea').value = '';
+      document.getElementById('canvasInfo').textContent = '請先選擇圖片檔案';
+      document.getElementById('imageInput').value = '';
+      currentImageData = null;
+      resetImageCanvas();
+    }
+    
+    function downloadConverterData() {
+      if (currentImageData) {
+        const blob = new Blob([currentImageData], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `epd_grayscale_data_${currentWidth}x${currentHeight}_${new Date().getTime()}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('數據檔案下載完成！');
+      } else {
+        showToast('請先轉換圖片！');
+      }
+    }
+    
+    function showToast(message) {
+      const toast = document.createElement('div');
+      toast.textContent = message;
+      toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #4CAF50;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 4px;
+        z-index: 1000;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        transition: opacity 0.3s;
+      `;
+      
+      document.body.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => {
+          document.body.removeChild(toast);
+        }, 300);
+      }, 3000);
+    }
   </script>
 
   <!-- 遊戲控制區域 -->
@@ -1383,6 +1612,230 @@ void handleRoot()
       <h4>⚽ 彈球遊戲 (在EPD上遊玩)</h4>
       <p style="text-align: center; color: #666;">彈球會自動在EPD屏幕上的邊框內反彈，無需手動控制</p>
       <p style="text-align: center; font-size: 14px; color: #666;">享受視覺效果即可！</p>
+    </div>
+  </div>
+
+  <!-- EPD 圖片轉換器整合 -->
+  <div class="text-control">
+    <h3>🖼️ EPD 圖片轉換器</h3>
+    <p>將任何圖片轉換為 EPD 可用的灰階數據，支援動態尺寸調整</p>
+    
+    <style>
+      .converter-container {
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 8px;
+        margin: 20px 0;
+        border: 1px solid #e9ecef;
+      }
+      
+      .size-settings {
+        background: #e3f2fd;
+        padding: 15px;
+        border-radius: 6px;
+        margin-bottom: 20px;
+        border-left: 4px solid #2196F3;
+      }
+      
+      .size-controls {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 15px;
+        flex-wrap: wrap;
+        margin: 10px 0;
+      }
+      
+      .size-input-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      
+      .size-select {
+        padding: 6px 10px;
+        border: 1px solid #ced4da;
+        border-radius: 4px;
+        background: white;
+        min-width: 70px;
+      }
+      
+      .multiply-symbol {
+        font-size: 18px;
+        font-weight: bold;
+        color: #6c757d;
+      }
+      
+      .preset-buttons {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 10px;
+      }
+      
+      .preset-btn {
+        background: #6c757d;
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        transition: background 0.3s;
+      }
+      
+      .preset-btn:hover {
+        background: #5a6268;
+      }
+      
+      .preset-btn.active {
+        background: #4CAF50;
+      }
+      
+      .canvas-container {
+        text-align: center;
+        margin: 20px 0;
+        border: 2px dashed #ddd;
+        padding: 15px;
+        border-radius: 6px;
+        background: white;
+      }
+      
+      #imageCanvas {
+        max-width: 100%;
+        border: 1px solid #ccc;
+        background: #f9f9f9;
+      }
+      
+      .upload-section {
+        text-align: center;
+        margin: 15px 0;
+      }
+      
+      .file-input-wrapper {
+        display: inline-block;
+        background: #4CAF50;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background 0.3s;
+      }
+      
+      .file-input-wrapper:hover {
+        background: #45a049;
+      }
+      
+      .converter-textarea {
+        width: 100%;
+        height: 150px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 8px;
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+        resize: vertical;
+        background: #fafafa;
+      }
+      
+      .converter-info {
+        margin: 10px 0;
+        padding: 10px;
+        background: #fff3cd;
+        border-radius: 4px;
+        border-left: 4px solid #ffc107;
+        font-size: 12px;
+      }
+    </style>
+    
+    <div class="converter-container">
+      <div class="size-settings">
+        <h4>📐 圖片尺寸設定</h4>
+        <div class="size-controls">
+          <div class="size-input-group">
+            <label>寬度:</label>
+            <select id="widthSelect" class="size-select">
+              <option value="32">32</option>
+              <option value="64">64</option>
+              <option value="128">128</option>
+              <option value="200">200</option>
+              <option value="320">320</option>
+              <option value="480" selected>480</option>
+              <option value="540">540</option>
+              <option value="600">600</option>
+              <option value="800">800</option>
+              <option value="960">960</option>
+            </select>
+          </div>
+          
+          <span class="multiply-symbol">×</span>
+          
+          <div class="size-input-group">
+            <label>高度:</label>
+            <select id="heightSelect" class="size-select">
+              <option value="32">32</option>
+              <option value="64">64</option>
+              <option value="128">128</option>
+              <option value="200">200</option>
+              <option value="320">320</option>
+              <option value="480">480</option>
+              <option value="540">540</option>
+              <option value="600">600</option>
+              <option value="800" selected>800</option>
+              <option value="960">960</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="preset-buttons">
+          <button class="preset-btn" onclick="setPresetSize(64, 64)">64×64</button>
+          <button class="preset-btn" onclick="setPresetSize(128, 128)">128×128</button>
+          <button class="preset-btn" onclick="setPresetSize(320, 240)">320×240</button>
+          <button class="preset-btn active" onclick="setPresetSize(480, 800)">480×800</button>
+          <button class="preset-btn" onclick="setPresetSize(540, 960)">540×960</button>
+          <button class="preset-btn" onclick="setPresetSize(800, 600)">800×600</button>
+        </div>
+      </div>
+      
+      <div class="upload-section">
+        <div class="file-input-wrapper" onclick="document.getElementById('imageInput').click()">
+          <input type="file" id="imageInput" accept="image/*" style="display: none;">
+          🖼️ 選擇圖片檔案
+        </div>
+      </div>
+      
+      <div class="converter-info">
+        <strong>使用說明：</strong>
+        <ul style="margin: 5px 0; padding-left: 20px;">
+          <li>選擇圖片後會自動轉換為指定尺寸的灰階圖片</li>
+          <li>灰階值範圍：0-15 (0=黑色, 15=白色)</li>
+          <li>在下方數據框雙擊可複製所有數據</li>
+          <li>可直接將數據貼到 "灰階圖片數據傳送" 功能使用</li>
+        </ul>
+      </div>
+      
+      <div class="canvas-container">
+        <canvas id="imageCanvas" width="480" height="800"></canvas>
+        <div id="canvasInfo" style="margin-top: 10px; color: #666; font-size: 12px;">
+          請先選擇圖片檔案
+        </div>
+      </div>
+      
+      <div style="margin-top: 15px;">
+        <label style="display: block; margin-bottom: 8px; font-weight: bold;" id="dataLabel">
+          灰階數據 (480×800 = 384,000 個值)：
+        </label>
+        <textarea id="converterDataTextarea" class="converter-textarea" placeholder="轉換後的灰階數據將顯示在這裡..." readonly></textarea>
+        <div style="margin-top: 5px; font-size: 11px; color: #666; font-style: italic;">
+          💡 雙擊文字框可複製所有數據到剪貼簿
+        </div>
+      </div>
+      
+      <div style="margin-top: 15px; text-align: center;">
+        <button onclick="resetConverter()" style="background: #6c757d; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;">重置</button>
+        <button onclick="downloadConverterData()" style="background: #17a2b8; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">下載數據</button>
+      </div>
     </div>
   </div>
 </body>
