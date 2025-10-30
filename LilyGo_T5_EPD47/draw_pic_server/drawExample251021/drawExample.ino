@@ -106,6 +106,14 @@ struct SokobanGame
       "#########"};
 } sokobanGame;
 
+// ===== 函數聲明 =====
+void drawDinoGame(bool forceClear = false);
+void drawBallGame(bool forceClear = false);
+void drawSokobanGame(bool forceClear = false);
+void updateDinoGame();
+void updateBallGame();
+void updateCurrentGame();
+
 // ===== 簡易 ASCII 字體 (5x7 點陣) =====
 // 基本的 ASCII 字符點陣數據
 const uint8_t ascii_font_5x7[][5] = {
@@ -531,6 +539,34 @@ void handleRoot()
       <input type="file" name="image" accept=".bin,.raw">
       <input type="submit" value="Upload">
     </form>
+  </div>
+
+  <div class="text-control">
+    <h3>灰階圖片數據傳送</h3>
+    <p>從外部工具生成的灰階數據 (0-15，逗號分隔)</p>
+    <div class="form-row">
+      <label>X座標:</label>
+      <input type="number" id="grayscaleX" min="0" max="%WIDTH%" value="0">
+      <label>Y座標:</label>
+      <input type="number" id="grayscaleY" min="0" max="%HEIGHT%" value="0">
+    </div>
+    <div class="form-row">
+      <label>圖片寬度:</label>
+      <input type="number" id="grayscaleWidth" min="1" max="%WIDTH%" value="100">
+      <label>圖片高度:</label>
+      <input type="number" id="grayscaleHeight" min="1" max="%HEIGHT%" value="100">
+    </div>
+    <div class="form-row">
+      <label>灰階數據:</label>
+      <textarea id="grayscaleData" placeholder="貼入灰階數據，格式: 15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0,..." rows="6" style="width:100%; max-width:600px; font-family:monospace;"></textarea>
+    </div>
+    <div class="form-row">
+      <button onclick="sendGrayscaleData()" style="background-color:#4CAF50; color:white; padding:10px 20px; font-size:16px;">傳送灰階圖片資料</button>
+      <button onclick="clearGrayscaleData()" style="margin-left:10px;">清除數據</button>
+    </div>
+    <div class="form-row">
+      <small>💡 提示: 從外部圖片轉換工具複製數據，設定好位置和尺寸後點擊傳送</small>
+    </div>
   </div>
 
   <script>
@@ -1203,6 +1239,77 @@ void handleRoot()
     
     // 定期更新遊戲狀態
     setInterval(updateGameState, 1000);
+    
+    // 灰階數據傳送函數
+    function sendGrayscaleData() {
+      const x = document.getElementById('grayscaleX').value;
+      const y = document.getElementById('grayscaleY').value;
+      const width = document.getElementById('grayscaleWidth').value;
+      const height = document.getElementById('grayscaleHeight').value;
+      const data = document.getElementById('grayscaleData').value.trim();
+      
+      // 驗證輸入
+      if (!data) {
+        alert('請輸入灰階數據！');
+        return;
+      }
+      
+      if (parseInt(width) <= 0 || parseInt(height) <= 0) {
+        alert('寬度和高度必須大於0！');
+        return;
+      }
+      
+      // 檢查數據格式
+      const values = data.split(',').map(v => v.trim()).filter(v => v !== '');
+      const expectedCount = parseInt(width) * parseInt(height);
+      
+      if (values.length !== expectedCount) {
+        alert(`數據點數不符！預期: ${expectedCount} 個，實際: ${values.length} 個`);
+        return;
+      }
+      
+      // 檢查數值範圍
+      for (let i = 0; i < values.length; i++) {
+        const val = parseInt(values[i]);
+        if (isNaN(val) || val < 0 || val > 15) {
+          alert(`第 ${i+1} 個數值無效: "${values[i]}"，應該是 0-15 之間的整數`);
+          return;
+        }
+      }
+      
+      console.log('Sending grayscale data:', {x, y, width, height, dataLength: values.length});
+      
+      // 準備發送數據
+      const formData = new FormData();
+      formData.append('x', x);
+      formData.append('y', y);
+      formData.append('width', width);
+      formData.append('height', height);
+      formData.append('data', data);
+      
+      // 發送到伺服器
+      fetch('/draw/grayscale', {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => response.text())
+      .then(result => {
+        console.log('Grayscale data sent successfully:', result);
+        alert('灰階圖片已成功顯示在EPD上！');
+      })
+      .catch(error => {
+        console.error('Error sending grayscale data:', error);
+        alert('傳送失敗: ' + error.message);
+      });
+    }
+    
+    function clearGrayscaleData() {
+      document.getElementById('grayscaleData').value = '';
+      document.getElementById('grayscaleX').value = '0';
+      document.getElementById('grayscaleY').value = '0';
+      document.getElementById('grayscaleWidth').value = '100';
+      document.getElementById('grayscaleHeight').value = '100';
+    }
     
     // 初始化 Canvas
     window.onload = function() {
@@ -2256,6 +2363,98 @@ void handleUpload()
   server.send(200, "text/plain", "Upload complete");
 }
 
+// ===== 灰階圖片數據處理 =====
+void handleGrayscaleData()
+{
+  Serial.println("handleGrayscaleData");
+  if (!framebuffer)
+  {
+    server.send(400, "text/plain", "Framebuffer not available");
+    return;
+  }
+
+  // 獲取參數
+  int x = server.arg("x").toInt();
+  int y = server.arg("y").toInt();
+  int width = server.arg("width").toInt();
+  int height = server.arg("height").toInt();
+  String dataStr = server.arg("data");
+
+  Serial.printf("Received grayscale data: x=%d, y=%d, size=%dx%d, data_length=%d\n",
+                x, y, width, height, dataStr.length());
+
+  // 驗證參數
+  if (width <= 0 || height <= 0 || dataStr.length() == 0)
+  {
+    server.send(400, "text/plain", "Invalid parameters");
+    return;
+  }
+
+  // 限制座標範圍
+  x = constrain(x, 0, EPD_WIDTH - 1);
+  y = constrain(y, 0, EPD_HEIGHT - 1);
+
+  // 限制尺寸以免超出螢幕邊界
+  if (x + width > EPD_WIDTH)
+    width = EPD_WIDTH - x;
+  if (y + height > EPD_HEIGHT)
+    height = EPD_HEIGHT - y;
+
+  // 解析數據
+  int expectedCount = width * height;
+  int dataIndex = 0;
+  int pixelIndex = 0;
+  String currentValue = "";
+
+  Serial.printf("Expected pixel count: %d\n", expectedCount);
+
+  epd_poweron();
+
+  // 解析逗號分隔的灰階值
+  for (int i = 0; i <= dataStr.length(); i++)
+  {
+    if (i == dataStr.length() || dataStr[i] == ',')
+    {
+      if (currentValue.length() > 0)
+      {
+        int grayValue = currentValue.toInt();
+
+        // 限制灰階值範圍 (0-15)
+        grayValue = constrain(grayValue, 0, 15);
+
+        // 計算在 EPD 上的像素位置
+        int pixelX = x + (pixelIndex % width);
+        int pixelY = y + (pixelIndex / width);
+
+        // 檢查是否在有效範圍內
+        if (pixelX < EPD_WIDTH && pixelY < EPD_HEIGHT && pixelIndex < expectedCount)
+        {
+          // 在 framebuffer 中設置像素值
+          epd_fill_rect(pixelX, pixelY, 1, 1, grayValue, framebuffer);
+        }
+
+        pixelIndex++;
+        currentValue = "";
+      }
+    }
+    else
+    {
+      currentValue += dataStr[i];
+    }
+  }
+
+  Serial.printf("Processed %d pixels\n", pixelIndex);
+
+  // 顯示到 EPD
+  epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  epd_poweroff();
+
+  String response = "Grayscale image drawn at (" + String(x) + "," + String(y) +
+                    ") size " + String(width) + "x" + String(height) +
+                    ", processed " + String(pixelIndex) + " pixels";
+  server.send(200, "text/plain", response);
+}
+
 void notFound()
 {
   Serial.println("notFound");
@@ -2284,7 +2483,7 @@ void handleGameSwitch()
     {
       dinoGame.obstacles[i].active = false;
     }
-    drawDinoGame();
+    drawDinoGame(true); // 遊戲切換時強制清除
   }
   else if (gameType == "ball")
   {
@@ -2294,7 +2493,7 @@ void handleGameSwitch()
     ballGame.y = EPD_HEIGHT / 2;
     ballGame.vx = 2.0;
     ballGame.vy = 1.5;
-    drawBallGame();
+    drawBallGame(true); // 遊戲切換時強制清除
   }
   else if (gameType == "sokoban")
   {
@@ -2309,7 +2508,7 @@ void handleGameSwitch()
     sokobanGame.boxes[1].x = 5;
     sokobanGame.boxes[1].y = 3;
     sokobanGame.boxes[1].onTarget = false;
-    drawSokobanGame();
+    drawSokobanGame(true); // 遊戲切換時強制清除
   }
   else
   {
@@ -2342,7 +2541,7 @@ void handleDinoJump()
     dinoGame.isJumping = true;
     dinoGame.jumpHeight = 60; // 跳躍高度
     Serial.println("Dino jumping!");
-    drawDinoGame();
+    drawDinoGame(true); // 手動操作時強制清除
   }
 
   server.send(200, "text/plain", "Dino jumped");
@@ -2358,7 +2557,7 @@ void handleDinoCrouch()
 
   dinoGame.isCrouching = true;
   Serial.println("Dino crouching!");
-  drawDinoGame();
+  drawDinoGame(true); // 手動操作時強制清除
 
   server.send(200, "text/plain", "Dino crouched");
 }
@@ -2373,7 +2572,7 @@ void handleDinoStandUp()
 
   dinoGame.isCrouching = false;
   Serial.println("Dino standing up!");
-  drawDinoGame();
+  drawDinoGame(true); // 手動操作時強制清除
 
   server.send(200, "text/plain", "Dino stood up");
 }
@@ -2452,7 +2651,7 @@ void handleSokobanMove()
     sokobanGame.moves++;
 
     Serial.printf("Sokoban moved %s to (%d,%d)\n", direction.c_str(), newX, newY);
-    drawSokobanGame();
+    drawSokobanGame(true); // 手動操作時強制清除
   }
 
   server.send(200, "text/plain", "Player moved " + direction);
@@ -2500,13 +2699,21 @@ void handleGameState()
 
 // ===== 遊戲繪製函數 =====
 
-void drawDinoGame()
+void drawDinoGame(bool forceClear)
 {
   if (!framebuffer)
     return;
 
   epd_poweron();
-  memset(framebuffer, 0xFF, FB_SIZE); // 清空畫面
+
+  // 清空framebuffer
+  memset(framebuffer, 0xFF, FB_SIZE);
+
+  // 只在需要時清除EPD（手動操作或遊戲重置時）
+  if (forceClear)
+  {
+    epd_clear();
+  }
 
   // 繪製地面
   epd_fill_rect(0, dinoGame.groundY + 20, EPD_WIDTH, 5, 0, framebuffer);
@@ -2552,13 +2759,21 @@ void drawDinoGame()
   epd_poweroff();
 }
 
-void drawBallGame()
+void drawBallGame(bool forceClear)
 {
   if (!framebuffer)
     return;
 
   epd_poweron();
-  memset(framebuffer, 0xFF, FB_SIZE); // 清空畫面
+
+  // 清空framebuffer
+  memset(framebuffer, 0xFF, FB_SIZE);
+
+  // 只在需要時清除EPD
+  if (forceClear)
+  {
+    epd_clear();
+  }
 
   // 繪製邊框
   epd_draw_rect(5, 5, EPD_WIDTH - 10, EPD_HEIGHT - 10, 0, framebuffer);
@@ -2575,13 +2790,21 @@ void drawBallGame()
   epd_poweroff();
 }
 
-void drawSokobanGame()
+void drawSokobanGame(bool forceClear)
 {
   if (!framebuffer)
     return;
 
   epd_poweron();
-  memset(framebuffer, 0xFF, FB_SIZE); // 清空畫面
+
+  // 清空framebuffer
+  memset(framebuffer, 0xFF, FB_SIZE);
+
+  // 只在需要時清除EPD
+  if (forceClear)
+  {
+    epd_clear();
+  }
 
   int cellSize = 40;
   int offsetX = 100;
@@ -2737,20 +2960,20 @@ void updateCurrentGame()
   static unsigned long lastGameUpdate = 0;
   unsigned long now = millis();
 
-  // 限制遊戲更新頻率（每500ms更新一次畫面）
-  if (now - lastGameUpdate < 500)
+  // 限制遊戲更新頻率（每1000ms更新一次畫面，降低EPD負荷）
+  if (now - lastGameUpdate < 1000)
     return;
   lastGameUpdate = now;
 
   if (currentGame == GAME_DINO)
   {
     updateDinoGame();
-    drawDinoGame();
+    drawDinoGame(false); // 自動更新不強制清除
   }
   else if (currentGame == GAME_BALL)
   {
     updateBallGame();
-    drawBallGame();
+    drawBallGame(false); // 自動更新不強制清除
   }
 }
 
@@ -2839,6 +3062,7 @@ void setup()
   server.on("/draw/text", HTTP_GET, handleDrawText);
   server.on("/draw/multitext", HTTP_GET, handleDrawMultiText);
   server.on("/draw/canvas", HTTP_POST, handleCanvasData);
+  server.on("/draw/grayscale", HTTP_POST, handleGrayscaleData);
   server.on("/upload", HTTP_POST, []()
             { server.send(200); }, handleUpload);
 
