@@ -33,14 +33,7 @@ WebServer server(80);
 
 // ===== Framebuffer =====
 uint8_t *framebuffer = NULL;
-const int FB_SIZE = EPD_WIDTH * EPD_HEIGHT / 2; // 4-bit grayscale; 除以 2 的原因：每個像素用 4 個位元儲存，1 個 byte 可以存 2 個像素，所以總像素數除以 2 就得到需要的位元組數。
-// 每個像素的 4-bit 值對應:
-// 0x0 = 黑色 (最深)
-// 0x1 = 深灰
-// 0x2 = 稍深灰
-// ...
-// 0xE = 淺灰
-// 0xF = 白色 (最淡)
+const int FB_SIZE = EPD_WIDTH * EPD_HEIGHT / 2; // 2-bit grayscale
 
 // ===== 遊戲狀態變數 =====
 enum GameType
@@ -120,6 +113,7 @@ void drawSokobanGame(bool forceClear = false);
 void updateDinoGame();
 void updateBallGame();
 void updateCurrentGame();
+void drawLine(int x0, int y0, int x1, int y1, int color, int thickness);
 
 // ===== 簡易 ASCII 字體 (5x7 點陣) =====
 // 基本的 ASCII 字符點陣數據
@@ -546,6 +540,34 @@ void handleRoot()
       <input type="file" name="image" accept=".bin,.raw">
       <input type="submit" value="Upload">
     </form>
+  </div>
+
+  <div class="text-control">
+    <h3>灰階圖片數據傳送</h3>
+    <p>從外部工具生成的灰階數據 (0-15，逗號分隔)</p>
+    <div class="form-row">
+      <label>X座標:</label>
+      <input type="number" id="grayscaleX" min="0" max="%WIDTH%" value="0">
+      <label>Y座標:</label>
+      <input type="number" id="grayscaleY" min="0" max="%HEIGHT%" value="0">
+    </div>
+    <div class="form-row">
+      <label>圖片寬度:</label>
+      <input type="number" id="grayscaleWidth" min="1" max="%WIDTH%" value="100">
+      <label>圖片高度:</label>
+      <input type="number" id="grayscaleHeight" min="1" max="%HEIGHT%" value="100">
+    </div>
+    <div class="form-row">
+      <label>灰階數據:</label>
+      <textarea id="grayscaleData" placeholder="貼入灰階數據，格式: 15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0,..." rows="6" style="width:100%; max-width:600px; font-family:monospace;"></textarea>
+    </div>
+    <div class="form-row">
+      <button onclick="sendGrayscaleData()" style="background-color:#4CAF50; color:white; padding:10px 20px; font-size:16px;">傳送灰階圖片資料</button>
+      <button onclick="clearGrayscaleData()" style="margin-left:10px;">清除數據</button>
+    </div>
+    <div class="form-row">
+      <small>💡 提示: 從外部圖片轉換工具複製數據，設定好位置和尺寸後點擊傳送</small>
+    </div>
   </div>
 
   <script>
@@ -1219,11 +1241,311 @@ void handleRoot()
     // 定期更新遊戲狀態
     setInterval(updateGameState, 1000);
     
+    // 灰階數據傳送函數
+    function sendGrayscaleData() {
+      const x = document.getElementById('grayscaleX').value;
+      const y = document.getElementById('grayscaleY').value;
+      const width = document.getElementById('grayscaleWidth').value;
+      const height = document.getElementById('grayscaleHeight').value;
+      const data = document.getElementById('grayscaleData').value.trim();
+      
+      // 驗證輸入
+      if (!data) {
+        alert('請輸入灰階數據！');
+        return;
+      }
+      
+      if (parseInt(width) <= 0 || parseInt(height) <= 0) {
+        alert('寬度和高度必須大於0！');
+        return;
+      }
+      
+      // 檢查數據格式
+      const values = data.split(',').map(v => v.trim()).filter(v => v !== '');
+      const expectedCount = parseInt(width) * parseInt(height);
+      
+      if (values.length !== expectedCount) {
+        alert(`數據點數不符！預期: ${expectedCount} 個，實際: ${values.length} 個`);
+        return;
+      }
+      
+      // 檢查數值範圍
+      for (let i = 0; i < values.length; i++) {
+        const val = parseInt(values[i]);
+        if (isNaN(val) || val < 0 || val > 15) {
+          alert(`第 ${i+1} 個數值無效: "${values[i]}"，應該是 0-15 之間的整數`);
+          return;
+        }
+      }
+      
+      console.log('Sending grayscale data:', {x, y, width, height, dataLength: values.length});
+      
+      // 準備發送數據
+      const formData = new FormData();
+      formData.append('x', x);
+      formData.append('y', y);
+      formData.append('width', width);
+      formData.append('height', height);
+      formData.append('data', data);
+      
+      // 發送到伺服器
+      fetch('/draw/grayscale', {
+        method: 'POST',
+        body: formData
+      })
+      .then(response => response.text())
+      .then(result => {
+        console.log('Grayscale data sent successfully:', result);
+        alert('灰階圖片已成功顯示在EPD上！');
+      })
+      .catch(error => {
+        console.error('Error sending grayscale data:', error);
+        alert('傳送失敗: ' + error.message);
+      });
+    }
+    
+    function clearGrayscaleData() {
+      document.getElementById('grayscaleData').value = '';
+      document.getElementById('grayscaleX').value = '0';
+      document.getElementById('grayscaleY').value = '0';
+      document.getElementById('grayscaleWidth').value = '100';
+      document.getElementById('grayscaleHeight').value = '100';
+    }
+    
     // 初始化 Canvas
     window.onload = function() {
       initCanvas();
       updateGameDisplay();
+      initImageConverter();
     };
+    
+    // ===== 圖片轉換器功能 =====
+    let currentWidth = 480;
+    let currentHeight = 800;
+    let imageCanvas = null;
+    let imageCtx = null;
+    let currentImageData = null;
+    
+    function initImageConverter() {
+      imageCanvas = document.getElementById('imageCanvas');
+      imageCtx = imageCanvas.getContext('2d');
+      
+      // 設置初始畫布
+      resetImageCanvas();
+      
+      // 綁定事件
+      document.getElementById('imageInput').addEventListener('change', handleImageUpload);
+      document.getElementById('widthSelect').addEventListener('change', updateCanvasSize);
+      document.getElementById('heightSelect').addEventListener('change', updateCanvasSize);
+      document.getElementById('converterDataTextarea').addEventListener('dblclick', copyConverterData);
+    }
+    
+    function updateCanvasSize() {
+      currentWidth = parseInt(document.getElementById('widthSelect').value);
+      currentHeight = parseInt(document.getElementById('heightSelect').value);
+      
+      // 更新畫布尺寸
+      imageCanvas.width = currentWidth;
+      imageCanvas.height = currentHeight;
+      
+      // 更新標籤
+      const totalPixels = currentWidth * currentHeight;
+      document.getElementById('dataLabel').textContent = 
+        `灰階數據 (${currentWidth}×${currentHeight} = ${totalPixels.toLocaleString()} 個值)：`;
+      
+      // 重置畫布
+      resetImageCanvas();
+      
+      // 更新預設按鈕狀態
+      updatePresetButtons();
+    }
+    
+    function setPresetSize(width, height) {
+      document.getElementById('widthSelect').value = width;
+      document.getElementById('heightSelect').value = height;
+      updateCanvasSize();
+    }
+    
+    function updatePresetButtons() {
+      const presetButtons = document.querySelectorAll('.preset-btn');
+      presetButtons.forEach(btn => btn.classList.remove('active'));
+      
+      // 檢查是否符合預設尺寸
+      if (currentWidth === 64 && currentHeight === 64) {
+        presetButtons[0].classList.add('active');
+      } else if (currentWidth === 128 && currentHeight === 128) {
+        presetButtons[1].classList.add('active');
+      } else if (currentWidth === 320 && currentHeight === 240) {
+        presetButtons[2].classList.add('active');
+      } else if (currentWidth === 480 && currentHeight === 800) {
+        presetButtons[3].classList.add('active');
+      } else if (currentWidth === 540 && currentHeight === 960) {
+        presetButtons[4].classList.add('active');
+      } else if (currentWidth === 800 && currentHeight === 600) {
+        presetButtons[5].classList.add('active');
+      }
+    }
+    
+    function handleImageUpload(e) {
+      const file = e.target.files[0];
+      if (file) {
+        processImage(file);
+      }
+    }
+    
+    function processImage(file) {
+      const reader = new FileReader();
+      
+      reader.onload = function(e) {
+        const img = new Image();
+        
+        img.onload = function() {
+          // 清除畫布
+          resetImageCanvas();
+          
+          // 繪製並縮放圖片到指定尺寸
+          imageCtx.drawImage(img, 0, 0, currentWidth, currentHeight);
+          
+          // 獲取圖片數據
+          const imageData = imageCtx.getImageData(0, 0, currentWidth, currentHeight);
+          
+          // 轉換為灰階
+          const grayscaleData = convertToGrayscale(imageData);
+          
+          // 重新繪製灰階圖片
+          drawGrayscaleImageToCanvas(grayscaleData);
+          
+          // 轉換為數據格式
+          const dataString = grayscaleData.join(',');
+          document.getElementById('converterDataTextarea').value = dataString;
+          currentImageData = dataString;
+          
+          // 更新資訊
+          document.getElementById('canvasInfo').innerHTML = 
+            `<strong>圖片資訊：</strong><br>
+             原始尺寸: ${img.width} × ${img.height}<br>
+             轉換尺寸: ${currentWidth} × ${currentHeight}<br>
+             數據點數: ${grayscaleData.length.toLocaleString()}<br>
+             檔案大小: ${(file.size / 1024).toFixed(1)} KB`;
+          
+          showToast('圖片轉換完成！');
+        };
+        
+        img.src = e.target.result;
+      };
+      
+      reader.readAsDataURL(file);
+    }
+    
+    function convertToGrayscale(imageData) {
+      const data = imageData.data;
+      const grayscaleData = [];
+      
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        
+        // 使用標準灰階轉換公式
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        
+        // 轉換為 0-15 範圍 (EPD 4-bit 灰階)
+        const grayscaleValue = Math.round((gray / 255) * 15);
+        grayscaleData.push(grayscaleValue);
+      }
+      
+      return grayscaleData;
+    }
+    
+    function drawGrayscaleImageToCanvas(grayscaleData) {
+      const imageData = imageCtx.createImageData(currentWidth, currentHeight);
+      const data = imageData.data;
+      
+      for (let i = 0; i < grayscaleData.length; i++) {
+        const grayValue = Math.round((grayscaleData[i] / 15) * 255);
+        const pixelIndex = i * 4;
+        
+        data[pixelIndex] = grayValue;     // R
+        data[pixelIndex + 1] = grayValue; // G
+        data[pixelIndex + 2] = grayValue; // B
+        data[pixelIndex + 3] = 255;       // A
+      }
+      
+      imageCtx.putImageData(imageData, 0, 0);
+    }
+    
+    function resetImageCanvas() {
+      imageCtx.fillStyle = '#ffffff';
+      imageCtx.fillRect(0, 0, currentWidth, currentHeight);
+    }
+    
+    function copyConverterData() {
+      const textarea = document.getElementById('converterDataTextarea');
+      textarea.select();
+      textarea.setSelectionRange(0, 99999);
+      
+      try {
+        document.execCommand('copy');
+        showToast('數據已複製到剪貼簿！');
+      } catch (err) {
+        navigator.clipboard.writeText(textarea.value).then(() => {
+          showToast('數據已複製到剪貼簿！');
+        }).catch(() => {
+          showToast('複製失敗，請手動選取複製');
+        });
+      }
+    }
+    
+    function resetConverter() {
+      document.getElementById('converterDataTextarea').value = '';
+      document.getElementById('canvasInfo').textContent = '請先選擇圖片檔案';
+      document.getElementById('imageInput').value = '';
+      currentImageData = null;
+      resetImageCanvas();
+    }
+    
+    function downloadConverterData() {
+      if (currentImageData) {
+        const blob = new Blob([currentImageData], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `epd_grayscale_data_${currentWidth}x${currentHeight}_${new Date().getTime()}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('數據檔案下載完成！');
+      } else {
+        showToast('請先轉換圖片！');
+      }
+    }
+    
+    function showToast(message) {
+      const toast = document.createElement('div');
+      toast.textContent = message;
+      toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #4CAF50;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 4px;
+        z-index: 1000;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        transition: opacity 0.3s;
+      `;
+      
+      document.body.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => {
+          document.body.removeChild(toast);
+        }, 300);
+      }, 3000);
+    }
   </script>
 
   <!-- 遊戲控制區域 -->
@@ -1291,6 +1613,230 @@ void handleRoot()
       <h4>⚽ 彈球遊戲 (在EPD上遊玩)</h4>
       <p style="text-align: center; color: #666;">彈球會自動在EPD屏幕上的邊框內反彈，無需手動控制</p>
       <p style="text-align: center; font-size: 14px; color: #666;">享受視覺效果即可！</p>
+    </div>
+  </div>
+
+  <!-- EPD 圖片轉換器整合 -->
+  <div class="text-control">
+    <h3>🖼️ EPD 圖片轉換器</h3>
+    <p>將任何圖片轉換為 EPD 可用的灰階數據，支援動態尺寸調整</p>
+    
+    <style>
+      .converter-container {
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 8px;
+        margin: 20px 0;
+        border: 1px solid #e9ecef;
+      }
+      
+      .size-settings {
+        background: #e3f2fd;
+        padding: 15px;
+        border-radius: 6px;
+        margin-bottom: 20px;
+        border-left: 4px solid #2196F3;
+      }
+      
+      .size-controls {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 15px;
+        flex-wrap: wrap;
+        margin: 10px 0;
+      }
+      
+      .size-input-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      
+      .size-select {
+        padding: 6px 10px;
+        border: 1px solid #ced4da;
+        border-radius: 4px;
+        background: white;
+        min-width: 70px;
+      }
+      
+      .multiply-symbol {
+        font-size: 18px;
+        font-weight: bold;
+        color: #6c757d;
+      }
+      
+      .preset-buttons {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 10px;
+      }
+      
+      .preset-btn {
+        background: #6c757d;
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        transition: background 0.3s;
+      }
+      
+      .preset-btn:hover {
+        background: #5a6268;
+      }
+      
+      .preset-btn.active {
+        background: #4CAF50;
+      }
+      
+      .canvas-container {
+        text-align: center;
+        margin: 20px 0;
+        border: 2px dashed #ddd;
+        padding: 15px;
+        border-radius: 6px;
+        background: white;
+      }
+      
+      #imageCanvas {
+        max-width: 100%;
+        border: 1px solid #ccc;
+        background: #f9f9f9;
+      }
+      
+      .upload-section {
+        text-align: center;
+        margin: 15px 0;
+      }
+      
+      .file-input-wrapper {
+        display: inline-block;
+        background: #4CAF50;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background 0.3s;
+      }
+      
+      .file-input-wrapper:hover {
+        background: #45a049;
+      }
+      
+      .converter-textarea {
+        width: 100%;
+        height: 150px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 8px;
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+        resize: vertical;
+        background: #fafafa;
+      }
+      
+      .converter-info {
+        margin: 10px 0;
+        padding: 10px;
+        background: #fff3cd;
+        border-radius: 4px;
+        border-left: 4px solid #ffc107;
+        font-size: 12px;
+      }
+    </style>
+    
+    <div class="converter-container">
+      <div class="size-settings">
+        <h4>📐 圖片尺寸設定</h4>
+        <div class="size-controls">
+          <div class="size-input-group">
+            <label>寬度:</label>
+            <select id="widthSelect" class="size-select">
+              <option value="32">32</option>
+              <option value="64">64</option>
+              <option value="128">128</option>
+              <option value="200">200</option>
+              <option value="320">320</option>
+              <option value="480" selected>480</option>
+              <option value="540">540</option>
+              <option value="600">600</option>
+              <option value="800">800</option>
+              <option value="960">960</option>
+            </select>
+          </div>
+          
+          <span class="multiply-symbol">×</span>
+          
+          <div class="size-input-group">
+            <label>高度:</label>
+            <select id="heightSelect" class="size-select">
+              <option value="32">32</option>
+              <option value="64">64</option>
+              <option value="128">128</option>
+              <option value="200">200</option>
+              <option value="320">320</option>
+              <option value="480">480</option>
+              <option value="540">540</option>
+              <option value="600">600</option>
+              <option value="800" selected>800</option>
+              <option value="960">960</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="preset-buttons">
+          <button class="preset-btn" onclick="setPresetSize(64, 64)">64×64</button>
+          <button class="preset-btn" onclick="setPresetSize(128, 128)">128×128</button>
+          <button class="preset-btn" onclick="setPresetSize(320, 240)">320×240</button>
+          <button class="preset-btn active" onclick="setPresetSize(480, 800)">480×800</button>
+          <button class="preset-btn" onclick="setPresetSize(540, 960)">540×960</button>
+          <button class="preset-btn" onclick="setPresetSize(800, 600)">800×600</button>
+        </div>
+      </div>
+      
+      <div class="upload-section">
+        <div class="file-input-wrapper" onclick="document.getElementById('imageInput').click()">
+          <input type="file" id="imageInput" accept="image/*" style="display: none;">
+          🖼️ 選擇圖片檔案
+        </div>
+      </div>
+      
+      <div class="converter-info">
+        <strong>使用說明：</strong>
+        <ul style="margin: 5px 0; padding-left: 20px;">
+          <li>選擇圖片後會自動轉換為指定尺寸的灰階圖片</li>
+          <li>灰階值範圍：0-15 (0=黑色, 15=白色)</li>
+          <li>在下方數據框雙擊可複製所有數據</li>
+          <li>可直接將數據貼到 "灰階圖片數據傳送" 功能使用</li>
+        </ul>
+      </div>
+      
+      <div class="canvas-container">
+        <canvas id="imageCanvas" width="480" height="800"></canvas>
+        <div id="canvasInfo" style="margin-top: 10px; color: #666; font-size: 12px;">
+          請先選擇圖片檔案
+        </div>
+      </div>
+      
+      <div style="margin-top: 15px;">
+        <label style="display: block; margin-bottom: 8px; font-weight: bold;" id="dataLabel">
+          灰階數據 (480×800 = 384,000 個值)：
+        </label>
+        <textarea id="converterDataTextarea" class="converter-textarea" placeholder="轉換後的灰階數據將顯示在這裡..." readonly></textarea>
+        <div style="margin-top: 5px; font-size: 11px; color: #666; font-style: italic;">
+          💡 雙擊文字框可複製所有數據到剪貼簿
+        </div>
+      </div>
+      
+      <div style="margin-top: 15px; text-align: center;">
+        <button onclick="resetConverter()" style="background: #6c757d; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;">重置</button>
+        <button onclick="downloadConverterData()" style="background: #17a2b8; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">下載數據</button>
+      </div>
     </div>
   </div>
 </body>
@@ -2271,6 +2817,98 @@ void handleUpload()
   server.send(200, "text/plain", "Upload complete");
 }
 
+// ===== 灰階圖片數據處理 =====
+void handleGrayscaleData()
+{
+  Serial.println("handleGrayscaleData");
+  if (!framebuffer)
+  {
+    server.send(400, "text/plain", "Framebuffer not available");
+    return;
+  }
+
+  // 獲取參數
+  int x = server.arg("x").toInt();
+  int y = server.arg("y").toInt();
+  int width = server.arg("width").toInt();
+  int height = server.arg("height").toInt();
+  String dataStr = server.arg("data");
+
+  Serial.printf("Received grayscale data: x=%d, y=%d, size=%dx%d, data_length=%d\n",
+                x, y, width, height, dataStr.length());
+
+  // 驗證參數
+  if (width <= 0 || height <= 0 || dataStr.length() == 0)
+  {
+    server.send(400, "text/plain", "Invalid parameters");
+    return;
+  }
+
+  // 限制座標範圍
+  x = constrain(x, 0, EPD_WIDTH - 1);
+  y = constrain(y, 0, EPD_HEIGHT - 1);
+
+  // 限制尺寸以免超出螢幕邊界
+  if (x + width > EPD_WIDTH)
+    width = EPD_WIDTH - x;
+  if (y + height > EPD_HEIGHT)
+    height = EPD_HEIGHT - y;
+
+  // 解析數據
+  int expectedCount = width * height;
+  int dataIndex = 0;
+  int pixelIndex = 0;
+  String currentValue = "";
+
+  Serial.printf("Expected pixel count: %d\n", expectedCount);
+
+  epd_poweron();
+
+  // 解析逗號分隔的灰階值
+  for (int i = 0; i <= dataStr.length(); i++)
+  {
+    if (i == dataStr.length() || dataStr[i] == ',')
+    {
+      if (currentValue.length() > 0)
+      {
+        int grayValue = currentValue.toInt();
+
+        // 限制灰階值範圍 (0-15)
+        grayValue = constrain(grayValue, 0, 15);
+
+        // 計算在 EPD 上的像素位置
+        int pixelX = x + (pixelIndex % width);
+        int pixelY = y + (pixelIndex / width);
+
+        // 檢查是否在有效範圍內
+        if (pixelX < EPD_WIDTH && pixelY < EPD_HEIGHT && pixelIndex < expectedCount)
+        {
+          // 在 framebuffer 中設置像素值
+          epd_fill_rect(pixelX, pixelY, 1, 1, grayValue, framebuffer);
+        }
+
+        pixelIndex++;
+        currentValue = "";
+      }
+    }
+    else
+    {
+      currentValue += dataStr[i];
+    }
+  }
+
+  Serial.printf("Processed %d pixels\n", pixelIndex);
+
+  // 顯示到 EPD
+  epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  epd_poweroff();
+
+  String response = "Grayscale image drawn at (" + String(x) + "," + String(y) +
+                    ") size " + String(width) + "x" + String(height) +
+                    ", processed " + String(pixelIndex) + " pixels";
+  server.send(200, "text/plain", response);
+}
+
 void notFound()
 {
   Serial.println("notFound");
@@ -2878,6 +3516,7 @@ void setup()
   server.on("/draw/text", HTTP_GET, handleDrawText);
   server.on("/draw/multitext", HTTP_GET, handleDrawMultiText);
   server.on("/draw/canvas", HTTP_POST, handleCanvasData);
+  server.on("/draw/grayscale", HTTP_POST, handleGrayscaleData);
   server.on("/upload", HTTP_POST, []()
             { server.send(200); }, handleUpload);
 
