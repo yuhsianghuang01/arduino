@@ -3,12 +3,60 @@
  * - Starts AP mode
  * - Shows IP:Port on EPD top-left
  * - Web interface to draw shapes or upload image
+ *
+ * ==========================================
+ * LilyGo T5 EPD47 網頁控制器與遊戲平台
+ * ==========================================
+ *
+ * 程式功能：
+ * 這是一個功能豐富的電子紙網頁控制器程式，整合了多種互動功能：
+ *
+ * 🌐 網路功能：
+ * - WiFi 熱點模式（AP Mode）
+ * - 內建 HTTP 網頁伺服器
+ * - 圖形繪製網頁介面
+ * - 圖片上傳與顯示功能
+ *
+ * 🎮 遊戲功能：
+ * - Chrome 小恐龍跳躍遊戲
+ * - 彈球遊戲
+ * - 推箱子遊戲（Sokoban）
+ * - 觸控與網頁雙重控制
+ *
+ * 🎨 繪圖功能：
+ * - 線條、矩形、圓形繪製
+ * - 文字顯示功能
+ * - 圖片上傳與顯示
+ * - 即時網頁控制介面
+ *
+ * 📱 顯示功能：
+ * - 4.7 吋電子紙顯示
+ * - 2 位元灰階顯示
+ * - 即時畫面更新
+ * - IP 位址資訊顯示
+ *
+ * 硬體需求：
+ * - LilyGo T5 EPD47 開發板
+ * - ESP32-S3 處理器
+ * - 16MB PSRAM（必須啟用）
+ * - 4.7 吋電子紙顯示器
+ *
+ * 使用方式：
+ * 1. 上傳程式到開發板
+ * 2. 連線到 "EPD-Controller" WiFi 熱點（密碼：12345678）
+ * 3. 開啟瀏覽器存取顯示的 IP 位址
+ * 4. 透過網頁介面控制繪圖或玩遊戲
+ *
+ * 注意事項：
+ * - 需要在 Arduino IDE 中啟用 PSRAM
+ * - 大型程式，編譯時間較長
+ * - 支援多人同時連線控制
  */
 
-#include <Arduino.h>
-#include <WiFi.h>
-#include <WebServer.h>
-#include "epd_driver.h"
+#include <Arduino.h>    // Arduino 核心函式庫
+#include <WiFi.h>       // WiFi 功能函式庫
+#include <WebServer.h>  // HTTP 網頁伺服器函式庫
+#include "epd_driver.h" // 電子紙驅動程式庫
 
 // 移除可能有問題的 utilities.h
 // #include "utilities.h"
@@ -16,37 +64,37 @@
 // 嘗試包含字體檔案（如果可用）
 // 常見的 EPD 字體檔案
 #ifdef EPD_FONT_OPENSANS18B_H
-#include "opensans18b.h"
+#include "opensans18b.h" // 18pt 粗體字型
 #endif
 #ifdef EPD_FONT_OPENSANS12B_H
-#include "opensans12b.h"
+#include "opensans12b.h" // 12pt 粗體字型
 #endif
 
 // 如果沒有字體檔案，我們將使用圖形方式顯示數字和字母
 
-// ===== WiFi AP Config =====
-const char *ssid = "EPD-Controller";
-const char *password = "12345678"; // 至少8碼
+// ===== WiFi AP 設定 =====
+const char *ssid = "EPD-Controller"; // WiFi 熱點名稱
+const char *password = "12345678";   // WiFi 密碼（至少8碼）
 
-// ===== Web Server =====
-WebServer server(80);
+// ===== 網頁伺服器 =====
+WebServer server(80); // 建立 HTTP 伺服器，監聽埠 80
 
-// ===== Framebuffer =====
-uint8_t *framebuffer = NULL;
-const int FB_SIZE = EPD_WIDTH * EPD_HEIGHT / 2; // 2-bit grayscale
+// ===== 影像緩衝區 =====
+uint8_t *framebuffer = NULL;                    // 影像緩衝區指標
+const int FB_SIZE = EPD_WIDTH * EPD_HEIGHT / 2; // 2 位元灰階緩衝區大小
 
 // ===== 遊戲狀態變數 =====
-enum GameType
+enum GameType // 遊戲類型列舉
 {
-  GAME_NONE,
-  GAME_DINO,
-  GAME_BALL,
-  GAME_SOKOBAN
+  GAME_NONE,   // 無遊戲
+  GAME_DINO,   // 小恐龍遊戲
+  GAME_BALL,   // 彈球遊戲
+  GAME_SOKOBAN // 推箱子遊戲
 };
-GameType currentGame = GAME_NONE;
+GameType currentGame = GAME_NONE; // 目前遊戲狀態
 
-// Chrome小恐龍遊戲狀態
-struct DinoGame
+// Chrome小恐龍遊戲狀態結構
+struct DinoGame // 小恐龍遊戲結構
 {
   int x = 100;
   int y = 450; // 地面位置
