@@ -253,11 +253,41 @@ void draw_char_5x7(int x, int y, char c, uint8_t color, uint8_t *fb)
   }
 }
 
+// ===== 繪製放大字符的函式 =====
+void draw_char_5x7_scaled(int x, int y, char c, uint8_t color, int scale, uint8_t *fb)
+{
+  if (c < 32 || c > 90)
+    return; // 只支援基本 ASCII
+
+  int char_index = c - 32;
+
+  for (int col = 0; col < 5; col++)
+  {
+    uint8_t column = ascii_font_5x7[char_index][col];
+    for (int row = 0; row < 7; row++)
+    {
+      if (column & (1 << row))
+      {
+        int px = x + col * scale;
+        int py = y + row * scale;
+        if (px >= 0 && px < EPD_WIDTH && py >= 0 && py < EPD_HEIGHT)
+        {
+          // 繪製 scale x scale 大小的矩形
+          int rect_width = min(scale, EPD_WIDTH - px);
+          int rect_height = min(scale, EPD_HEIGHT - py);
+          epd_fill_rect(px, py, rect_width, rect_height, color, fb);
+        }
+      }
+    }
+  }
+}
+
 // ===== 簡化的 IP 顯示函式（只顯示數字和點號）=====
 void draw_ip_simple(int x, int y, const char *ip_str, uint8_t color, uint8_t *fb)
 {
   int current_x = x;
-  int char_spacing = 8; // 字符間距
+  int scale = 3;                        // 字體縮放倍數：3倍大小，讓字體更清楚易讀
+  int char_spacing = 5 * scale + scale; // 字符間距 = 字符寬度 + 間隔
 
   for (int i = 0; i < strlen(ip_str); i++)
   {
@@ -274,7 +304,8 @@ void draw_ip_simple(int x, int y, const char *ip_str, uint8_t color, uint8_t *fb
         c = c - 'a' + 'A';
       }
 
-      draw_char_5x7(current_x, y, c, color, fb);
+      // 使用放大版本的字符繪製函式，讓 IP 地址更清楚
+      draw_char_5x7_scaled(current_x, y, c, color, scale, fb);
       current_x += char_spacing;
     }
   }
@@ -3477,6 +3508,9 @@ void updateCurrentGame()
     drawBallGame(false); // 自動更新不強制清除
   }
 }
+
+// ===== 函數宣告 =====
+void drawLine(int x0, int y0, int x1, int y1, int color, int thickness);
 
 // ===== Setup =====
 void setup()
