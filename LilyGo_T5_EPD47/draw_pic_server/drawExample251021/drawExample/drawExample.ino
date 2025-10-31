@@ -1,4 +1,4 @@
-﻿/**
+/**
  * EPD Web Controller via Wi-Fi AP
  * - Starts AP mode
  * - Shows IP:Port on EPD top-left
@@ -161,70 +161,71 @@ void drawSokobanGame(bool forceClear = false);
 void updateDinoGame();
 void updateBallGame();
 void updateCurrentGame();
+void drawLine(int x0, int y0, int x1, int y1, int color, int thickness)
 
-// ===== 簡易 ASCII 字體 (5x7 點陣) =====
-// 基本的 ASCII 字符點陣數據
-const uint8_t ascii_font_5x7[][5] = {
-    {0x00, 0x00, 0x00, 0x00, 0x00}, // 空格 (32)
-    {0x00, 0x00, 0x5F, 0x00, 0x00}, // ! (33)
-    {0x00, 0x07, 0x00, 0x07, 0x00}, // " (34)
-    {0x14, 0x7F, 0x14, 0x7F, 0x14}, // # (35)
-    {0x24, 0x2A, 0x7F, 0x2A, 0x12}, // $ (36)
-    {0x23, 0x13, 0x08, 0x64, 0x62}, // % (37)
-    {0x36, 0x49, 0x55, 0x22, 0x50}, // & (38)
-    {0x00, 0x05, 0x03, 0x00, 0x00}, // ' (39)
-    {0x00, 0x1C, 0x22, 0x41, 0x00}, // ( (40)
-    {0x00, 0x41, 0x22, 0x1C, 0x00}, // ) (41)
-    {0x08, 0x2A, 0x1C, 0x2A, 0x08}, // * (42)
-    {0x08, 0x08, 0x3E, 0x08, 0x08}, // + (43)
-    {0x00, 0x50, 0x30, 0x00, 0x00}, // , (44)
-    {0x08, 0x08, 0x08, 0x08, 0x08}, // - (45)
-    {0x00, 0x60, 0x60, 0x00, 0x00}, // . (46)
-    {0x20, 0x10, 0x08, 0x04, 0x02}, // / (47)
-    {0x3E, 0x51, 0x49, 0x45, 0x3E}, // 0 (48)
-    {0x00, 0x42, 0x7F, 0x40, 0x00}, // 1 (49)
-    {0x42, 0x61, 0x51, 0x49, 0x46}, // 2 (50)
-    {0x21, 0x41, 0x45, 0x4B, 0x31}, // 3 (51)
-    {0x18, 0x14, 0x12, 0x7F, 0x10}, // 4 (52)
-    {0x27, 0x45, 0x45, 0x45, 0x39}, // 5 (53)
-    {0x3C, 0x4A, 0x49, 0x49, 0x30}, // 6 (54)
-    {0x01, 0x71, 0x09, 0x05, 0x03}, // 7 (55)
-    {0x36, 0x49, 0x49, 0x49, 0x36}, // 8 (56)
-    {0x06, 0x49, 0x49, 0x29, 0x1E}, // 9 (57)
-    {0x00, 0x36, 0x36, 0x00, 0x00}, // : (58)
-    {0x00, 0x56, 0x36, 0x00, 0x00}, // ; (59)
-    {0x00, 0x08, 0x14, 0x22, 0x41}, // < (60)
-    {0x14, 0x14, 0x14, 0x14, 0x14}, // = (61)
-    {0x41, 0x22, 0x14, 0x08, 0x00}, // > (62)
-    {0x02, 0x01, 0x51, 0x09, 0x06}, // ? (63)
-    {0x32, 0x49, 0x79, 0x41, 0x3E}, // @ (64)
-    {0x7E, 0x11, 0x11, 0x11, 0x7E}, // A (65)
-    {0x7F, 0x49, 0x49, 0x49, 0x36}, // B (66)
-    {0x3E, 0x41, 0x41, 0x41, 0x22}, // C (67)
-    {0x7F, 0x41, 0x41, 0x22, 0x1C}, // D (68)
-    {0x7F, 0x49, 0x49, 0x49, 0x41}, // E (69)
-    {0x7F, 0x09, 0x09, 0x01, 0x01}, // F (70)
-    {0x3E, 0x41, 0x49, 0x49, 0x7A}, // G (71)
-    {0x7F, 0x08, 0x08, 0x08, 0x7F}, // H (72)
-    {0x00, 0x41, 0x7F, 0x41, 0x00}, // I (73)
-    {0x20, 0x40, 0x41, 0x3F, 0x01}, // J (74)
-    {0x7F, 0x08, 0x14, 0x22, 0x41}, // K (75)
-    {0x7F, 0x40, 0x40, 0x40, 0x40}, // L (76)
-    {0x7F, 0x02, 0x04, 0x02, 0x7F}, // M (77)
-    {0x7F, 0x04, 0x08, 0x10, 0x7F}, // N (78)
-    {0x3E, 0x41, 0x41, 0x41, 0x3E}, // O (79)
-    {0x7F, 0x09, 0x09, 0x09, 0x06}, // P (80)
-    {0x3E, 0x41, 0x51, 0x21, 0x5E}, // Q (81)
-    {0x7F, 0x09, 0x19, 0x29, 0x46}, // R (82)
-    {0x46, 0x49, 0x49, 0x49, 0x31}, // S (83)
-    {0x01, 0x01, 0x7F, 0x01, 0x01}, // T (84)
-    {0x3F, 0x40, 0x40, 0x40, 0x3F}, // U (85)
-    {0x1F, 0x20, 0x40, 0x20, 0x1F}, // V (86)
-    {0x7F, 0x20, 0x18, 0x20, 0x7F}, // W (87)
-    {0x63, 0x14, 0x08, 0x14, 0x63}, // X (88)
-    {0x03, 0x04, 0x78, 0x04, 0x03}, // Y (89)
-    {0x61, 0x51, 0x49, 0x45, 0x43}, // Z (90)
-};
+    // ===== 簡易 ASCII 字體 (5x7 點陣) =====
+    // 基本的 ASCII 字符點陣數據
+    const uint8_t ascii_font_5x7[][5] = {
+      {0x00, 0x00, 0x00, 0x00, 0x00}, // 空格 (32)
+      {0x00, 0x00, 0x5F, 0x00, 0x00}, // ! (33)
+      {0x00, 0x07, 0x00, 0x07, 0x00}, // " (34)
+      {0x14, 0x7F, 0x14, 0x7F, 0x14}, // # (35)
+      {0x24, 0x2A, 0x7F, 0x2A, 0x12}, // $ (36)
+      {0x23, 0x13, 0x08, 0x64, 0x62}, // % (37)
+      {0x36, 0x49, 0x55, 0x22, 0x50}, // & (38)
+      {0x00, 0x05, 0x03, 0x00, 0x00}, // ' (39)
+      {0x00, 0x1C, 0x22, 0x41, 0x00}, // ( (40)
+      {0x00, 0x41, 0x22, 0x1C, 0x00}, // ) (41)
+      {0x08, 0x2A, 0x1C, 0x2A, 0x08}, // * (42)
+      {0x08, 0x08, 0x3E, 0x08, 0x08}, // + (43)
+      {0x00, 0x50, 0x30, 0x00, 0x00}, // , (44)
+      {0x08, 0x08, 0x08, 0x08, 0x08}, // - (45)
+      {0x00, 0x60, 0x60, 0x00, 0x00}, // . (46)
+      {0x20, 0x10, 0x08, 0x04, 0x02}, // / (47)
+      {0x3E, 0x51, 0x49, 0x45, 0x3E}, // 0 (48)
+      {0x00, 0x42, 0x7F, 0x40, 0x00}, // 1 (49)
+      {0x42, 0x61, 0x51, 0x49, 0x46}, // 2 (50)
+      {0x21, 0x41, 0x45, 0x4B, 0x31}, // 3 (51)
+      {0x18, 0x14, 0x12, 0x7F, 0x10}, // 4 (52)
+      {0x27, 0x45, 0x45, 0x45, 0x39}, // 5 (53)
+      {0x3C, 0x4A, 0x49, 0x49, 0x30}, // 6 (54)
+      {0x01, 0x71, 0x09, 0x05, 0x03}, // 7 (55)
+      {0x36, 0x49, 0x49, 0x49, 0x36}, // 8 (56)
+      {0x06, 0x49, 0x49, 0x29, 0x1E}, // 9 (57)
+      {0x00, 0x36, 0x36, 0x00, 0x00}, // : (58)
+      {0x00, 0x56, 0x36, 0x00, 0x00}, // ; (59)
+      {0x00, 0x08, 0x14, 0x22, 0x41}, // < (60)
+      {0x14, 0x14, 0x14, 0x14, 0x14}, // = (61)
+      {0x41, 0x22, 0x14, 0x08, 0x00}, // > (62)
+      {0x02, 0x01, 0x51, 0x09, 0x06}, // ? (63)
+      {0x32, 0x49, 0x79, 0x41, 0x3E}, // @ (64)
+      {0x7E, 0x11, 0x11, 0x11, 0x7E}, // A (65)
+      {0x7F, 0x49, 0x49, 0x49, 0x36}, // B (66)
+      {0x3E, 0x41, 0x41, 0x41, 0x22}, // C (67)
+      {0x7F, 0x41, 0x41, 0x22, 0x1C}, // D (68)
+      {0x7F, 0x49, 0x49, 0x49, 0x41}, // E (69)
+      {0x7F, 0x09, 0x09, 0x01, 0x01}, // F (70)
+      {0x3E, 0x41, 0x49, 0x49, 0x7A}, // G (71)
+      {0x7F, 0x08, 0x08, 0x08, 0x7F}, // H (72)
+      {0x00, 0x41, 0x7F, 0x41, 0x00}, // I (73)
+      {0x20, 0x40, 0x41, 0x3F, 0x01}, // J (74)
+      {0x7F, 0x08, 0x14, 0x22, 0x41}, // K (75)
+      {0x7F, 0x40, 0x40, 0x40, 0x40}, // L (76)
+      {0x7F, 0x02, 0x04, 0x02, 0x7F}, // M (77)
+      {0x7F, 0x04, 0x08, 0x10, 0x7F}, // N (78)
+      {0x3E, 0x41, 0x41, 0x41, 0x3E}, // O (79)
+      {0x7F, 0x09, 0x09, 0x09, 0x06}, // P (80)
+      {0x3E, 0x41, 0x51, 0x21, 0x5E}, // Q (81)
+      {0x7F, 0x09, 0x19, 0x29, 0x46}, // R (82)
+      {0x46, 0x49, 0x49, 0x49, 0x31}, // S (83)
+      {0x01, 0x01, 0x7F, 0x01, 0x01}, // T (84)
+      {0x3F, 0x40, 0x40, 0x40, 0x3F}, // U (85)
+      {0x1F, 0x20, 0x40, 0x20, 0x1F}, // V (86)
+      {0x7F, 0x20, 0x18, 0x20, 0x7F}, // W (87)
+      {0x63, 0x14, 0x08, 0x14, 0x63}, // X (88)
+      {0x03, 0x04, 0x78, 0x04, 0x03}, // Y (89)
+      {0x61, 0x51, 0x49, 0x45, 0x43}, // Z (90)
+    };
 
 // ===== 繪製單個字符的函式 =====
 void draw_char_5x7(int x, int y, char c, uint8_t color, uint8_t *fb)
@@ -620,6 +621,229 @@ void handleRoot()
     </form>
   </div>
 
+  <!-- EPD 圖片轉換器整合 -->
+  <div class="text-control">
+    <h3>🖼️ EPD 圖片轉換器</h3>
+    <p>將任何圖片轉換為 EPD 可用的灰階數據，支援動態尺寸調整</p>
+    
+    <style>
+      .converter-container {
+        background: #f8f9fa;
+        padding: 20px;
+        border-radius: 8px;
+        margin: 20px 0;
+        border: 1px solid #e9ecef;
+      }
+      
+      .size-settings {
+        background: #e3f2fd;
+        padding: 15px;
+        border-radius: 6px;
+        margin-bottom: 20px;
+        border-left: 4px solid #2196F3;
+      }
+      
+      .size-controls {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 15px;
+        flex-wrap: wrap;
+        margin: 10px 0;
+      }
+      
+      .size-input-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      
+      .size-select {
+        padding: 6px 10px;
+        border: 1px solid #ced4da;
+        border-radius: 4px;
+        background: white;
+        min-width: 70px;
+      }
+      
+      .multiply-symbol {
+        font-size: 18px;
+        font-weight: bold;
+        color: #6c757d;
+      }
+      
+      .preset-buttons {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 10px;
+      }
+      
+      .preset-btn {
+        background: #6c757d;
+        color: white;
+        border: none;
+        padding: 5px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        transition: background 0.3s;
+      }
+      
+      .preset-btn:hover {
+        background: #5a6268;
+      }
+      
+      .preset-btn.active {
+        background: #4CAF50;
+      }
+      
+      .canvas-container {
+        text-align: center;
+        margin: 20px 0;
+        border: 2px dashed #ddd;
+        padding: 15px;
+        border-radius: 6px;
+        background: white;
+      }
+      
+      #imageCanvas {
+        max-width: 100%;
+        border: 1px solid #ccc;
+        background: #f9f9f9;
+      }
+      
+      .upload-section {
+        text-align: center;
+        margin: 15px 0;
+      }
+      
+      .file-input-wrapper {
+        display: inline-block;
+        background: #4CAF50;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background 0.3s;
+      }
+      
+      .file-input-wrapper:hover {
+        background: #45a049;
+      }
+      
+      .converter-textarea {
+        width: 100%;
+        height: 150px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 8px;
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+        resize: vertical;
+        background: #fafafa;
+      }
+      
+      .converter-info {
+        margin: 10px 0;
+        padding: 10px;
+        background: #fff3cd;
+        border-radius: 4px;
+        border-left: 4px solid #ffc107;
+        font-size: 12px;
+      }
+    </style>
+    
+    <div class="converter-container">
+      <div class="size-settings">
+        <h4>📐 圖片尺寸設定</h4>
+        <div class="size-controls">
+          <div class="size-input-group">
+            <label>寬度:</label>
+            <select id="widthSelect" class="size-select">
+              <option value="32">32</option>
+              <option value="64">64</option>
+              <option value="128">128</option>
+              <option value="200">200</option>
+              <option value="320">320</option>
+              <option value="480" selected>480</option>
+              <option value="540">540</option>
+              <option value="600">600</option>
+              <option value="800">800</option>
+              <option value="960">960</option>
+            </select>
+          </div>
+          
+          <span class="multiply-symbol">×</span>
+          
+          <div class="size-input-group">
+            <label>高度:</label>
+            <select id="heightSelect" class="size-select">
+              <option value="32">32</option>
+              <option value="64">64</option>
+              <option value="128">128</option>
+              <option value="200">200</option>
+              <option value="320">320</option>
+              <option value="480">480</option>
+              <option value="540">540</option>
+              <option value="600">600</option>
+              <option value="800" selected>800</option>
+              <option value="960">960</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="preset-buttons">
+          <button class="preset-btn" onclick="setPresetSize(64, 64)">64×64</button>
+          <button class="preset-btn" onclick="setPresetSize(128, 128)">128×128</button>
+          <button class="preset-btn" onclick="setPresetSize(320, 240)">320×240</button>
+          <button class="preset-btn active" onclick="setPresetSize(480, 800)">480×800</button>
+          <button class="preset-btn" onclick="setPresetSize(540, 960)">540×960</button>
+          <button class="preset-btn" onclick="setPresetSize(800, 600)">800×600</button>
+        </div>
+      </div>
+      
+      <div class="upload-section">
+        <div class="file-input-wrapper" onclick="document.getElementById('imageInput').click()">
+          <input type="file" id="imageInput" accept="image/*" style="display: none;">
+          🖼️ 選擇圖片檔案
+        </div>
+      </div>
+      
+      <div class="converter-info">
+        <strong>使用說明：</strong>
+        <ul style="margin: 5px 0; padding-left: 20px;">
+          <li>選擇圖片後會自動轉換為指定尺寸的灰階圖片</li>
+          <li>灰階值範圍：0-15 (0=黑色, 15=白色)</li>
+          <li>在下方數據框雙擊可複製所有數據</li>
+          <li>可直接將數據貼到 "灰階圖片數據傳送" 功能使用</li>
+        </ul>
+      </div>
+      
+      <div class="canvas-container">
+        <canvas id="imageCanvas" width="480" height="800"></canvas>
+        <div id="canvasInfo" style="margin-top: 10px; color: #666; font-size: 12px;">
+          請先選擇圖片檔案
+        </div>
+      </div>
+      
+      <div style="margin-top: 15px;">
+        <label style="display: block; margin-bottom: 8px; font-weight: bold;" id="dataLabel">
+          灰階數據 (480×800 = 384,000 個值)：
+        </label>
+        <textarea id="converterDataTextarea" class="converter-textarea" placeholder="轉換後的灰階數據將顯示在這裡..." readonly></textarea>
+        <div style="margin-top: 5px; font-size: 11px; color: #666; font-style: italic;">
+          💡 雙擊文字框可複製所有數據到剪貼簿
+        </div>
+      </div>
+      
+      <div style="margin-top: 15px; text-align: center;">
+        <button onclick="resetConverter()" style="background: #6c757d; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;">重置</button>
+        <button onclick="downloadConverterData()" style="background: #17a2b8; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">下載數據</button>
+      </div>
+    </div>
+  </div>
   <div class="text-control">
     <h3>灰階圖片數據傳送</h3>
     <p>從外部工具生成的灰階數據 (0-15，逗號分隔)</p>
@@ -637,7 +861,8 @@ void handleRoot()
     </div>
     <div class="form-row">
       <label>灰階數據:</label>
-      <textarea id="grayscaleData" placeholder="貼入灰階數據，格式: 15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0,..." rows="6" style="width:100%; max-width:600px; font-family:monospace;"></textarea>
+      <textarea id="grayscaleData" placeholder="貼入灰階數據，格式: 15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0,..." 
+      rows="6" style="width:100%; max-width:600px; font-family:monospace;"></textarea>
     </div>
     <div class="form-row">
       <button onclick="sendGrayscaleData()" style="background-color:#4CAF50; color:white; padding:10px 20px; font-size:16px;">傳送灰階圖片資料</button>
@@ -647,6 +872,7 @@ void handleRoot()
       <small>💡 提示: 從外部圖片轉換工具複製數據，設定好位置和尺寸後點擊傳送</small>
     </div>
   </div>
+  
 
   <script>
     // Canvas 繪圖變數
@@ -1693,230 +1919,7 @@ void handleRoot()
       <p style="text-align: center; font-size: 14px; color: #666;">享受視覺效果即可！</p>
     </div>
   </div>
-
-  <!-- EPD 圖片轉換器整合 -->
-  <div class="text-control">
-    <h3>🖼️ EPD 圖片轉換器</h3>
-    <p>將任何圖片轉換為 EPD 可用的灰階數據，支援動態尺寸調整</p>
-    
-    <style>
-      .converter-container {
-        background: #f8f9fa;
-        padding: 20px;
-        border-radius: 8px;
-        margin: 20px 0;
-        border: 1px solid #e9ecef;
-      }
-      
-      .size-settings {
-        background: #e3f2fd;
-        padding: 15px;
-        border-radius: 6px;
-        margin-bottom: 20px;
-        border-left: 4px solid #2196F3;
-      }
-      
-      .size-controls {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 15px;
-        flex-wrap: wrap;
-        margin: 10px 0;
-      }
-      
-      .size-input-group {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      
-      .size-select {
-        padding: 6px 10px;
-        border: 1px solid #ced4da;
-        border-radius: 4px;
-        background: white;
-        min-width: 70px;
-      }
-      
-      .multiply-symbol {
-        font-size: 18px;
-        font-weight: bold;
-        color: #6c757d;
-      }
-      
-      .preset-buttons {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        justify-content: center;
-        margin-top: 10px;
-      }
-      
-      .preset-btn {
-        background: #6c757d;
-        color: white;
-        border: none;
-        padding: 5px 10px;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 11px;
-        transition: background 0.3s;
-      }
-      
-      .preset-btn:hover {
-        background: #5a6268;
-      }
-      
-      .preset-btn.active {
-        background: #4CAF50;
-      }
-      
-      .canvas-container {
-        text-align: center;
-        margin: 20px 0;
-        border: 2px dashed #ddd;
-        padding: 15px;
-        border-radius: 6px;
-        background: white;
-      }
-      
-      #imageCanvas {
-        max-width: 100%;
-        border: 1px solid #ccc;
-        background: #f9f9f9;
-      }
-      
-      .upload-section {
-        text-align: center;
-        margin: 15px 0;
-      }
-      
-      .file-input-wrapper {
-        display: inline-block;
-        background: #4CAF50;
-        color: white;
-        padding: 10px 20px;
-        border-radius: 4px;
-        cursor: pointer;
-        transition: background 0.3s;
-      }
-      
-      .file-input-wrapper:hover {
-        background: #45a049;
-      }
-      
-      .converter-textarea {
-        width: 100%;
-        height: 150px;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        padding: 8px;
-        font-family: 'Courier New', monospace;
-        font-size: 11px;
-        resize: vertical;
-        background: #fafafa;
-      }
-      
-      .converter-info {
-        margin: 10px 0;
-        padding: 10px;
-        background: #fff3cd;
-        border-radius: 4px;
-        border-left: 4px solid #ffc107;
-        font-size: 12px;
-      }
-    </style>
-    
-    <div class="converter-container">
-      <div class="size-settings">
-        <h4>📐 圖片尺寸設定</h4>
-        <div class="size-controls">
-          <div class="size-input-group">
-            <label>寬度:</label>
-            <select id="widthSelect" class="size-select">
-              <option value="32">32</option>
-              <option value="64">64</option>
-              <option value="128">128</option>
-              <option value="200">200</option>
-              <option value="320">320</option>
-              <option value="480" selected>480</option>
-              <option value="540">540</option>
-              <option value="600">600</option>
-              <option value="800">800</option>
-              <option value="960">960</option>
-            </select>
-          </div>
-          
-          <span class="multiply-symbol">×</span>
-          
-          <div class="size-input-group">
-            <label>高度:</label>
-            <select id="heightSelect" class="size-select">
-              <option value="32">32</option>
-              <option value="64">64</option>
-              <option value="128">128</option>
-              <option value="200">200</option>
-              <option value="320">320</option>
-              <option value="480">480</option>
-              <option value="540">540</option>
-              <option value="600">600</option>
-              <option value="800" selected>800</option>
-              <option value="960">960</option>
-            </select>
-          </div>
-        </div>
-        
-        <div class="preset-buttons">
-          <button class="preset-btn" onclick="setPresetSize(64, 64)">64×64</button>
-          <button class="preset-btn" onclick="setPresetSize(128, 128)">128×128</button>
-          <button class="preset-btn" onclick="setPresetSize(320, 240)">320×240</button>
-          <button class="preset-btn active" onclick="setPresetSize(480, 800)">480×800</button>
-          <button class="preset-btn" onclick="setPresetSize(540, 960)">540×960</button>
-          <button class="preset-btn" onclick="setPresetSize(800, 600)">800×600</button>
-        </div>
-      </div>
-      
-      <div class="upload-section">
-        <div class="file-input-wrapper" onclick="document.getElementById('imageInput').click()">
-          <input type="file" id="imageInput" accept="image/*" style="display: none;">
-          🖼️ 選擇圖片檔案
-        </div>
-      </div>
-      
-      <div class="converter-info">
-        <strong>使用說明：</strong>
-        <ul style="margin: 5px 0; padding-left: 20px;">
-          <li>選擇圖片後會自動轉換為指定尺寸的灰階圖片</li>
-          <li>灰階值範圍：0-15 (0=黑色, 15=白色)</li>
-          <li>在下方數據框雙擊可複製所有數據</li>
-          <li>可直接將數據貼到 "灰階圖片數據傳送" 功能使用</li>
-        </ul>
-      </div>
-      
-      <div class="canvas-container">
-        <canvas id="imageCanvas" width="480" height="800"></canvas>
-        <div id="canvasInfo" style="margin-top: 10px; color: #666; font-size: 12px;">
-          請先選擇圖片檔案
-        </div>
-      </div>
-      
-      <div style="margin-top: 15px;">
-        <label style="display: block; margin-bottom: 8px; font-weight: bold;" id="dataLabel">
-          灰階數據 (480×800 = 384,000 個值)：
-        </label>
-        <textarea id="converterDataTextarea" class="converter-textarea" placeholder="轉換後的灰階數據將顯示在這裡..." readonly></textarea>
-        <div style="margin-top: 5px; font-size: 11px; color: #666; font-style: italic;">
-          💡 雙擊文字框可複製所有數據到剪貼簿
-        </div>
-      </div>
-      
-      <div style="margin-top: 15px; text-align: center;">
-        <button onclick="resetConverter()" style="background: #6c757d; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;">重置</button>
-        <button onclick="downloadConverterData()" style="background: #17a2b8; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">下載數據</button>
-      </div>
-    </div>
-  </div>
+  
 </body>
 </html>
 )rawliteral";
