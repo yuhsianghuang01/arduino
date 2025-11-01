@@ -27,12 +27,15 @@
 #include "lilygo.h"     // LilyGo 標誌圖像資料
 #include "logo.h"       // 其他標誌圖像資料
 
+// 白色畫面正面向後往電路版的方向看，按鈕順序為
+// RST, IO 0(BOOT), IO 35, IO 34, IO 39
 // 按鈕物件初始化
-Button2 btn1(BUTTON_1); // 主按鈕，所有板型都支援
+Button2 btn1(BUTTON_1); // 主按鈕，所有板型都支援 IO 34
 
 #if defined(CONFIG_IDF_TARGET_ESP32)
-Button2 btn2(BUTTON_2); // 按鈕 2，僅 ESP32 版本支援
-Button2 btn3(BUTTON_3); // 按鈕 3，僅 ESP32 版本支援
+Button2 btn2(BUTTON_2); // 按鈕 2，僅 ESP32 版本支援 IO 35
+Button2 btn3(BUTTON_3); // 按鈕 3，僅 ESP32 版本支援 IO 39
+
 #endif
 
 // 全域變數宣告
@@ -125,8 +128,10 @@ const char *overview[] = {
 /**
  * 顯示資訊函數，根據當前狀態顯示不同內容
  */
-void displayInfo(void)
+void displayInfo(Button2 &b)
 {
+    int pin = b.getPin();  // 取得觸發事件的 GPIO 腳位
+    Serial.println(pin);
     // 重設游標位置到左上角附近
     cursor_x = 20;
     cursor_y = 60;
@@ -160,10 +165,10 @@ void displayInfo(void)
 #if defined(CONFIG_IDF_TARGET_ESP32)
         // Set to wake up by GPIO39
         // 設定 GPIO39 作為喚醒源，當此腳位接收到低電位信號時喚醒 ESP32
-        esp_sleep_enable_ext1_wakeup(GPIO_SEL_39, ESP_EXT1_WAKEUP_ANY_LOW);
+        esp_sleep_enable_ext1_wakeup(GPIO_SEL_39, ESP_EXT1_WAKEUP_ALL_LOW);
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
         // 針對 ESP32-S3 晶片，設定 GPIO21 作為喚醒源
-        esp_sleep_enable_ext1_wakeup(GPIO_SEL_21, ESP_EXT1_WAKEUP_ANY_LOW);
+        esp_sleep_enable_ext1_wakeup(GPIO_SEL_21, ESP_EXT1_WAKEUP_ALL_LOW);
 #endif
         // 進入深度睡眠模式，此時 ESP32 消耗最少電力，只能透過設定的喚醒源喚醒
         esp_deep_sleep_start();
@@ -186,7 +191,7 @@ void displayInfo(void)
 void buttonPressed(Button2 &b)
 {
     // 更新顯示內容，根據當前狀態顯示對應的資訊
-    displayInfo();
+    displayInfo(b);
     // 狀態計數器遞增，用於循環切換不同的顯示內容
     state++;
 }
