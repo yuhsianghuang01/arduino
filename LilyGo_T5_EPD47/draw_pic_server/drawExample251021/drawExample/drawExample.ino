@@ -4,6 +4,31 @@
  * - Shows IP:Port on EPD top-left
  * - Web interface to draw shapes or upload image
  *
+ * 🔧 DEBUG VERSION - Enhanced with comprehensive logging
+ *
+ * 📝 日誌功能說明：
+ * - [INIT] 初始化階段日誌
+ * - [WIFI] WiFi 連線相關日誌
+ * - [SERVER] 網頁伺服器相關日誌
+ * - [REQUEST] HTTP 請求處理日誌
+ * - [DISPLAY] 電子紙顯示操作日誌
+ * - [DRAW] 繪圖操作日誌
+ * - [CANVAS] Canvas 數據處理日誌
+ * - [TEXT] 文字繪製日誌
+ * - [CLEAR] 清除操作日誌
+ * - [MEMORY] 記憶體使用狀況日誌
+ * - [ERROR] 錯誤訊息日誌
+ * - [DEBUG] 除錯詳細資訊日誌
+ * - [OK] 操作成功完成日誌
+ * - [404] 404 錯誤請求日誌
+ *
+ * 🚀 使用方式：
+ * 1. 設定 Serial Monitor 波特率為 115200
+ * 2. 上傳程式並開啟 Serial Monitor
+ * 3. 觀察初始化過程的詳細日誌
+ * 4. 使用網頁功能時觀察對應的日誌輸出
+ * 5. 遇到問題時查看相關的錯誤日誌
+ *
  * ==========================================
  * LilyGo T5 EPD47 網頁控制器
  * ==========================================
@@ -55,14 +80,61 @@
 // 移除可能有問題的 utilities.h
 // #include "utilities.h"
 
+// ===== 日誌輔助函數 =====
+void debugLog(const String &tag, const String &message)
+{
+  Serial.print("[");
+  Serial.print(tag);
+  Serial.print("] ");
+  Serial.println(message);
+}
+
+void debugLogf(const String &tag, const char *format, ...)
+{
+  va_list args;
+  va_start(args, format);
+  Serial.print("[");
+  Serial.print(tag);
+  Serial.print("] ");
+  Serial.printf(format, args);
+  va_end(args);
+}
+
+void memoryStatus()
+{
+  Serial.println("[MEMORY] Status:");
+  Serial.printf("  Free heap: %d bytes\n", ESP.getFreeHeap());
+  Serial.printf("  Free PSRAM: %d bytes\n", ESP.getFreePsram());
+  Serial.printf("  Largest free block: %d bytes\n", ESP.getMaxAllocHeap());
+}
+
 // 使用內建的 ASCII 點陣字體顯示文字
 
 // ===== WiFi AP 設定 =====
-const char *ssid = "EPD-Controller"; // WiFi 熱點名稱
-const char *password = "12345678";   // WiFi 密碼（至少8碼）
+const char *ssid = "EPD-Controller02"; // WiFi 熱點名稱
+const char *password = "12345678";     // WiFi 密碼（至少8碼）
 
 // ===== 網頁伺服器 =====
 WebServer server(80); // 建立 HTTP 伺服器，監聽埠 80
+
+// ===== HTTP 響應輔助函數 =====
+void sendUTF8Response(int code, const String &contentType, const String &content)
+{
+  server.sendHeader("Content-Type", contentType + "; charset=UTF-8");
+  server.send(code, contentType + "; charset=UTF-8", content);
+}
+
+void sendTextResponse(int code, const String &message)
+{
+  server.sendHeader("Content-Type", "text/plain; charset=UTF-8");
+  server.send(code, "text/plain; charset=UTF-8", message);
+}
+
+void sendHtmlResponse(int code, const String &html)
+{
+  server.sendHeader("Content-Type", "text/html; charset=UTF-8");
+  server.send(code, "text/html; charset=UTF-8", html);
+}
 
 // ===== 影像緩衝區 =====
 uint8_t *framebuffer = NULL;                    // 影像緩衝區指標
@@ -195,7 +267,7 @@ void draw_char_5x7_scaled(int x, int y, char c, uint8_t color, int scale, uint8_
 void draw_ip_simple(int x, int y, const char *ip_str, uint8_t color, uint8_t *fb)
 {
   int current_x = x;
-  int scale = 3;                        // 字體縮放倍數：3倍大小，讓字體更清楚易讀
+  int scale = 5;                        // 字體縮放倍數：3倍大小，讓字體更清楚易讀
   int char_spacing = 5 * scale + scale; // 字符間距 = 字符寬度 + 間隔
 
   for (int i = 0; i < strlen(ip_str); i++)
@@ -305,11 +377,17 @@ void epd_draw_text_advanced(const char *text, int x, int y, uint8_t textColor, u
 
 void handleRoot()
 {
-  Serial.println("handleRoot");
+  String clientIP = server.client().remoteIP().toString();
+  Serial.println("[REQUEST] handleRoot - Serving main page");
+  Serial.printf("[CLIENT] Request from IP: %s\n", clientIP.c_str());
+  Serial.printf("[MEMORY] Free heap before page serve: %d bytes\n", ESP.getFreeHeap());
+
+  unsigned long startTime = millis();
   String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <title>EPD Controller</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
@@ -1669,33 +1747,71 @@ void handleRoot()
   html.replace("%HEIGHT%", String(EPD_HEIGHT));
   html.replace("%BYTES%", String(FB_SIZE));
 
-  server.send(200, "text/html", html);
+  // 使用輔助函數發送 UTF-8 響應
+  sendHtmlResponse(200, html);
+
+  unsigned long endTime = millis();
+  Serial.printf("[OK] Main page served in %lu ms\n", endTime - startTime);
+  Serial.printf("[MEMORY] Free heap after page serve: %d bytes\n", ESP.getFreeHeap());
 }
 
 void handleClear()
 {
-  Serial.println("handleClear");
+  Serial.println("[REQUEST] handleClear - Starting clear operation");
+  unsigned long startTime = millis();
+
   if (framebuffer)
   {
+    Serial.println("[CLEAR] Clearing framebuffer...");
     memset(framebuffer, 0xFF, FB_SIZE);
+
+    Serial.println("[CLEAR] Powering on EPD...");
     epd_poweron();
+
+    Serial.println("[CLEAR] Clearing EPD display...");
     epd_clear();
+
+    Serial.println("[CLEAR] Powering off EPD...");
     epd_poweroff();
+
+    Serial.print("[OK] Clear operation completed in ");
+    Serial.print(millis() - startTime);
+    Serial.println(" ms");
   }
-  server.send(200, "text/plain", "OK");
+  else
+  {
+    Serial.println("[ERROR] Framebuffer is null!");
+  }
+
+  sendTextResponse(200, "OK");
 }
 
 void handleDrawLine()
 {
-  Serial.println("handleDrawLine");
+  Serial.println("[REQUEST] handleDrawLine - Drawing random line");
+  unsigned long startTime = millis();
+
   if (framebuffer)
   {
+    int y = random(10, EPD_HEIGHT);
+    Serial.print("[DRAW] Drawing line at y=");
+    Serial.println(y);
+
     epd_poweron();
-    epd_draw_hline(10, random(10, EPD_HEIGHT), EPD_WIDTH - 20, 0, framebuffer);
+    epd_draw_hline(10, y, EPD_WIDTH - 20, 0, framebuffer);
     epd_draw_grayscale_image(epd_full_screen(), framebuffer);
     epd_poweroff();
+
+    Serial.print("[OK] Line drawn in ");
+    Serial.print(millis() - startTime);
+    Serial.println(" ms");
   }
-  server.send(200, "text/plain", "Line drawn");
+  else
+  {
+    Serial.println("[ERROR] Framebuffer is null!");
+  }
+
+  sendTextResponse(200, "Line drawn");
 }
 
 void handleDrawRect()
@@ -1972,7 +2088,24 @@ void handleDrawRectAdvanced()
 // ===== 路徑繪製輔助函數 =====
 void drawPathPoints(String pointsStr, int color, int brushSize, int canvasWidth, int canvasHeight)
 {
-  Serial.printf("Drawing path: color=%d, size=%d, points='%s'\n", color, brushSize, pointsStr.substring(0, 50).c_str());
+  unsigned long startTime = millis();
+  Serial.printf("[DRAW] Starting path drawing: color=%d, size=%d, canvas=%dx%d\n",
+                color, brushSize, canvasWidth, canvasHeight);
+  Serial.printf("[DRAW] Points data length: %d chars, preview: '%s'\n",
+                pointsStr.length(), pointsStr.substring(0, 50).c_str());
+
+  // 驗證輸入參數
+  if (pointsStr.length() == 0)
+  {
+    Serial.println("[ERROR] Empty points string");
+    return;
+  }
+
+  if (canvasWidth <= 0 || canvasHeight <= 0)
+  {
+    Serial.printf("[ERROR] Invalid canvas size: %dx%d\n", canvasWidth, canvasHeight);
+    return;
+  }
 
   // 解析點數據：x1,y1|x2,y2|...
   int pointCount = 0;
@@ -2022,7 +2155,9 @@ void drawPathPoints(String pointsStr, int color, int brushSize, int canvasWidth,
     }
   }
 
-  Serial.printf("Drew path with %d points\n", pointCount);
+  unsigned long endTime = millis();
+  Serial.printf("[OK] Path drawing completed: %d points in %lu ms\n",
+                pointCount, endTime - startTime);
 }
 
 // 使用 Bresenham 算法繪製線條
@@ -2076,22 +2211,42 @@ void drawLine(int x0, int y0, int x1, int y1, int color, int thickness)
 // ===== Canvas 繪圖數據處理 =====
 void handleCanvasData()
 {
-  Serial.println("handleCanvasData");
-  Serial.println("Canvas data handler called");
+  Serial.println("[REQUEST] handleCanvasData - Processing canvas data");
+  unsigned long startTime = millis();
+  Serial.print("[DEBUG] Request method: ");
+  Serial.println(server.method() == HTTP_POST ? "POST" : "GET");
+  Serial.print("[DEBUG] Content length: ");
+  Serial.println(server.header("Content-Length"));
 
   // 顯示所有接收到的參數
-  Serial.printf("Number of arguments: %d\n", server.args());
+  Serial.printf("[DEBUG] Number of arguments: %d\n", server.args());
   for (int i = 0; i < server.args(); i++)
   {
-    Serial.printf("Arg %d: %s = %s\n", i, server.argName(i).c_str(), server.arg(i).c_str());
+    String argName = server.argName(i);
+    String argValue = server.arg(i);
+
+    // 對於大數據只顯示前後部分
+    if (argValue.length() > 100)
+    {
+      Serial.printf("[DEBUG] Arg %d: %s = [%d chars] %s...%s\n",
+                    i, argName.c_str(), argValue.length(),
+                    argValue.substring(0, 50).c_str(),
+                    argValue.substring(argValue.length() - 50).c_str());
+    }
+    else
+    {
+      Serial.printf("[DEBUG] Arg %d: %s = %s\n", i, argName.c_str(), argValue.c_str());
+    }
   }
 
   if (!framebuffer)
   {
-    Serial.println("ERROR: Framebuffer not available");
+    Serial.println("[ERROR] Framebuffer not available");
     server.send(400, "text/plain", "Framebuffer not available");
     return;
   }
+
+  Serial.println("[CANVAS] Framebuffer check passed");
 
   // 獲取 canvas 數據
   int canvasWidth = server.arg("width").toInt();
@@ -2100,15 +2255,17 @@ void handleCanvasData()
   bool isCompressed = server.hasArg("compressed") && server.arg("compressed").equals("1");
   bool isPathData = server.hasArg("paths") && server.arg("paths").equals("1");
 
-  Serial.printf("Debug: isPathData = %s\n", isPathData ? "TRUE" : "FALSE");
-  Serial.printf("Debug: server.hasArg('paths') = %s\n", server.hasArg("paths") ? "TRUE" : "FALSE");
+  Serial.printf("[CANVAS] Parsed parameters: width=%d, height=%d, data_length=%d\n",
+                canvasWidth, canvasHeight, dataStr.length());
+  Serial.printf("[CANVAS] Flags: compressed=%s, paths=%s\n",
+                isCompressed ? "yes" : "no", isPathData ? "yes" : "no");
+
+  Serial.printf("[DEBUG] isPathData = %s\n", isPathData ? "TRUE" : "FALSE");
+  Serial.printf("[DEBUG] server.hasArg('paths') = %s\n", server.hasArg("paths") ? "TRUE" : "FALSE");
   if (server.hasArg("paths"))
   {
-    Serial.printf("Debug: server.arg('paths') = '%s'\n", server.arg("paths").c_str());
+    Serial.printf("[DEBUG] server.arg('paths') = '%s'\n", server.arg("paths").c_str());
   }
-
-  Serial.printf("Parsed parameters: width=%d, height=%d, data_length=%d, compressed=%s, paths=%s\n",
-                canvasWidth, canvasHeight, dataStr.length(), isCompressed ? "yes" : "no", isPathData ? "yes" : "no");
 
   // 檢查路徑數據的完整性
   if (isPathData)
@@ -2472,9 +2629,12 @@ void handleCanvasData()
 
 void handleDrawText()
 {
-  Serial.println("handleDrawText");
+  Serial.println("[REQUEST] handleDrawText - Drawing text");
+  unsigned long startTime = millis();
+
   if (!framebuffer)
   {
+    Serial.println("[ERROR] Framebuffer not available");
     server.send(400, "text/plain", "Framebuffer not available");
     return;
   }
@@ -2485,6 +2645,9 @@ void handleDrawText()
   int y = server.arg("y").toInt();
   int textColor = server.arg("textColor").toInt();
   int bgColor = server.arg("bgColor").toInt();
+
+  Serial.printf("[TEXT] Drawing: '%s' at (%d,%d), colors: text=%d, bg=%d\n",
+                text.c_str(), x, y, textColor, bgColor);
   int fontSize = server.arg("fontSize").toInt();
 
   // 驗證參數
@@ -2733,8 +2896,26 @@ void handleGrayscaleData()
 
 void notFound()
 {
-  Serial.println("notFound");
-  server.send(404, "text/plain", "Not found");
+  String uri = server.uri();
+  String method = (server.method() == HTTP_GET) ? "GET" : (server.method() == HTTP_POST) ? "POST"
+                                                                                         : "OTHER";
+
+  Serial.print("[404] Request not found: ");
+  Serial.print(method);
+  Serial.print(" ");
+  Serial.println(uri);
+
+  if (server.args() > 0)
+  {
+    Serial.println("[404] Request arguments:");
+    for (int i = 0; i < server.args(); i++)
+    {
+      Serial.printf("  %s = %s\n", server.argName(i).c_str(), server.arg(i).c_str());
+    }
+  }
+
+  // 使用輔助函數發送 UTF-8 響應
+  sendTextResponse(404, "Not found: " + method + " " + uri);
 }
 
 // ===== 函數宣告 =====
@@ -2746,62 +2927,96 @@ void setup()
   Serial.begin(115200);
   delay(2000); // 增加延遲確保序列埠穩定
 
-  Serial.println("Starting EPD Controller...");
+  Serial.println("=== EPD Controller Starting ===");
+  Serial.print("Free heap at start: ");
+  Serial.println(ESP.getFreeHeap());
+  Serial.print("Free PSRAM at start: ");
+  Serial.println(ESP.getFreePsram());
 
   // 初始化 framebuffer
-  Serial.println("Initializing framebuffer...");
+  Serial.println("[INIT] Initializing framebuffer...");
+  Serial.print("Required framebuffer size: ");
+  Serial.println(FB_SIZE);
+
   framebuffer = (uint8_t *)ps_calloc(1, FB_SIZE);
   if (!framebuffer)
   {
-    Serial.println("PSRAM alloc failed!");
+    Serial.println("[ERROR] PSRAM alloc failed!");
+    Serial.print("Free PSRAM: ");
+    Serial.println(ESP.getFreePsram());
     while (1)
       delay(100);
   }
   memset(framebuffer, 0xFF, FB_SIZE);
-  Serial.println("Framebuffer initialized");
+  Serial.println("[OK] Framebuffer initialized successfully");
+  Serial.print("Free PSRAM after allocation: ");
+  Serial.println(ESP.getFreePsram());
 
   // 初始化 EPD
-  Serial.println("Initializing EPD...");
+  Serial.println("[INIT] Initializing EPD...");
   epd_init();
-  Serial.println("EPD init done");
+  Serial.println("[OK] EPD init completed");
 
+  Serial.println("[INIT] Powering on EPD...");
   epd_poweron();
-  Serial.println("EPD powered on");
+  Serial.println("[OK] EPD powered on");
 
+  Serial.println("[INIT] Clearing EPD display...");
   epd_clear();
-  Serial.println("EPD cleared");
+  Serial.println("[OK] EPD cleared");
 
+  Serial.println("[INIT] Powering off EPD...");
   epd_poweroff();
-  Serial.println("EPD powered off");
+  Serial.println("[OK] EPD powered off");
 
   // 啟動 Wi-Fi AP
-  Serial.println("Starting WiFi AP...");
-  WiFi.softAP(ssid, password);
+  Serial.println("[WIFI] Starting WiFi AP...");
+  Serial.print("SSID: ");
+  Serial.println(ssid);
+  Serial.print("Password: ");
+  Serial.println(password);
+
+  bool apResult = WiFi.softAP(ssid, password);
+  if (!apResult)
+  {
+    Serial.println("[ERROR] Failed to start WiFi AP!");
+    return;
+  }
+
   IPAddress IP = WiFi.softAPIP();
   String ipStr = "http://" + IP.toString() + ":80";
 
-  Serial.println("AP started");
-  Serial.print("IP address: ");
+  Serial.println("[OK] WiFi AP started successfully");
+  Serial.print("AP IP address: ");
+  Serial.println(IP.toString());
+  Serial.print("Full URL: ");
   Serial.println(ipStr);
 
   // 在 EPD 左上角顯示 IP 地址
-  Serial.println("Drawing IP on EPD...");
+  Serial.println("[DISPLAY] Drawing IP on EPD...");
+  Serial.println("[DISPLAY] Powering on EPD for IP display...");
   epd_poweron();
 
   // 方法1: 使用簡化的 IP 顯示（推薦）
   String simpleIP = IP.toString() + ":80";
+  Serial.print("[DISPLAY] Drawing IP: ");
+  Serial.println(simpleIP);
   draw_ip_simple(10, 10, simpleIP.c_str(), 0, framebuffer);
 
   // 在下方顯示 SSID
-  draw_ip_simple(10, 25, ssid, 0, framebuffer);
+  Serial.print("[DISPLAY] Drawing SSID: ");
+  Serial.println(ssid);
+  draw_ip_simple(10, 60, ssid, 0, framebuffer);
 
   // 更新 EPD 顯示
+  Serial.println("[DISPLAY] Updating EPD display...");
   epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+  Serial.println("[DISPLAY] Powering off EPD...");
   epd_poweroff();
-  Serial.println("IP displayed on EPD");
+  Serial.println("[OK] IP displayed on EPD successfully");
 
   // 設定 Web Server 路由
-  Serial.println("Setting up web server routes...");
+  Serial.println("[SERVER] Setting up web server routes...");
   server.on("/", HTTP_GET, handleRoot);
   server.on("/clear", HTTP_GET, handleClear);
   server.on("/draw/line", HTTP_GET, handleDrawLine);
@@ -2818,6 +3033,7 @@ void setup()
             { server.send(200); }, handleUpload);
 
   server.onNotFound(notFound);
+  Serial.println("[OK] All routes configured");
 
   // 設定 WebServer 的緩衝區大小以處理大型 POST 數據
   const char *headerKeys[] = {"Content-Length"};
@@ -2825,15 +3041,22 @@ void setup()
 
   // 增加 WebServer 的緩衝區大小限制
   // 預設可能只有 1KB，我們需要更大的緩衝區來處理路徑數據
-  Serial.println("Configuring WebServer for large POST data...");
+  Serial.println("[SERVER] Configuring WebServer for large POST data...");
 
+  Serial.println("[SERVER] Starting web server...");
   server.begin();
-  Serial.println("Web server started");
-  Serial.println("Setup complete!");
+  Serial.println("[OK] Web server started successfully");
+
+  Serial.println("=== Setup Complete ===");
   Serial.print("Connect to WiFi: ");
   Serial.println(ssid);
   Serial.print("Open browser: ");
   Serial.println(ipStr);
+  Serial.print("Final free heap: ");
+  Serial.println(ESP.getFreeHeap());
+  Serial.print("Final free PSRAM: ");
+  Serial.println(ESP.getFreePsram());
+  Serial.println("=== System Ready ===");
 }
 
 // ===== Loop =====
@@ -2843,9 +3066,32 @@ void loop()
 
   // 每10秒輸出一次心跳信號，確認程式在運行
   static unsigned long lastHeartbeat = 0;
+  static int clientCount = 0;
+
   if (millis() - lastHeartbeat > 10000)
   {
-    Serial.println("System running... Waiting for connections");
+    int currentClients = WiFi.softAPgetStationNum();
+
+    Serial.println("=== System Status ===");
+    Serial.print("Uptime: ");
+    Serial.print(millis() / 1000);
+    Serial.println(" seconds");
+    Serial.print("Connected clients: ");
+    Serial.println(currentClients);
+    Serial.print("Free heap: ");
+    Serial.println(ESP.getFreeHeap());
+    Serial.print("Free PSRAM: ");
+    Serial.println(ESP.getFreePsram());
+
+    if (currentClients != clientCount)
+    {
+      Serial.print("[WIFI] Client count changed: ");
+      Serial.print(clientCount);
+      Serial.print(" -> ");
+      Serial.println(currentClients);
+      clientCount = currentClients;
+    }
+
     lastHeartbeat = millis();
   }
 
