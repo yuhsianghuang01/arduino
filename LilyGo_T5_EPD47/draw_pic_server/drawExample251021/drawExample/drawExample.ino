@@ -1997,6 +1997,10 @@ void handleRoot()
       const width = parseInt(document.getElementById('imgWidth').value) || 100;
       const height = parseInt(document.getElementById('imgHeight').value) || 100;
       
+      // 檢查尺寸限制
+      const maxPixels = 100000;
+      const currentPixels = width * height;
+      
       // 清除畫布
       previewCtx.fillStyle = 'white';
       previewCtx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
@@ -2021,9 +2025,15 @@ void handleRoot()
         // 應用圖片效果
         applyImageEffects();
         
-        // 更新位置資訊
-        document.getElementById('positionInfo').textContent = 
-          `位置: (${x}, ${y}), 尺寸: ${width} × ${height}`;
+        // 更新位置資訊（包含尺寸警告）
+        let positionText = `位置: (${x}, ${y}), 尺寸: ${width} × ${height}`;
+        if (currentPixels > maxPixels) {
+          positionText += ` ⚠️ 超過限制 (${currentPixels.toLocaleString()} > 100,000)`;
+        } else {
+          positionText += ` ✓ 符合限制 (${currentPixels.toLocaleString()}/100,000)`;
+        }
+        
+        document.getElementById('positionInfo').textContent = positionText;
           
       } catch (error) {
         console.error('預覽更新失敗:', error);
@@ -2088,18 +2098,42 @@ void handleRoot()
       const aspectRatio = originalImageData.height / originalImageData.width;
       const newHeight = Math.round(targetWidth * aspectRatio);
       
-      if (newHeight <= 960) {
+      // 檢查像素限制
+      const maxPixels = 100000;
+      const currentPixels = targetWidth * newHeight;
+      
+      if (currentPixels > maxPixels) {
+        // 自動縮放到合適尺寸
+        const scale = Math.sqrt(maxPixels / currentPixels);
+        const scaledWidth = Math.floor(targetWidth * scale);
+        const scaledHeight = Math.floor(newHeight * scale);
+        
+        document.getElementById('imgWidth').value = scaledWidth;
+        document.getElementById('imgHeight').value = scaledHeight;
+        showToast('圖片已自動縮放至合適尺寸 (' + scaledWidth + 'x' + scaledHeight + ')');
+      } else if (newHeight <= 960) {
         document.getElementById('imgHeight').value = newHeight;
+        showToast('已調整為正確比例');
       } else {
         // 如果高度超出，則基於高度計算寬度
         const targetHeight = 960;
         const newWidth = Math.round(targetHeight / aspectRatio);
-        document.getElementById('imgWidth').value = newWidth;
-        document.getElementById('imgHeight').value = targetHeight;
+        const newPixels = newWidth * targetHeight;
+        
+        if (newPixels > maxPixels) {
+          // 再次檢查並縮放
+          const scale = Math.sqrt(maxPixels / newPixels);
+          document.getElementById('imgWidth').value = Math.floor(newWidth * scale);
+          document.getElementById('imgHeight').value = Math.floor(targetHeight * scale);
+          showToast('圖片已自動縮放至合適尺寸');
+        } else {
+          document.getElementById('imgWidth').value = newWidth;
+          document.getElementById('imgHeight').value = targetHeight;
+          showToast('已調整為正確比例');
+        }
       }
       
       updateImagePreview();
-      showToast('已調整為正確比例');
     }
     
     // 輔助功能：圖片置中
@@ -2731,19 +2765,48 @@ void handleRoot()
       ctx.putImageData(imageData, 0, 0);
       progressBar.style.width = '60%';
       
-      // 轉換為base64
-      var base64Data = canvas.toDataURL('image/png').split(',')[1];
+      // 提取灰階數據（不使用base64，直接傳送數值陣列）
+      var grayData = [];
+      for (var i = 0; i < destData.length; i += 4) {
+        var gray4bit = Math.round(destData[i] / 17);
+        grayData.push(Math.max(0, Math.min(15, gray4bit)));
+      }
+      
       progressBar.style.width = '80%';
+      
+      // 檢查數據大小限制
+      var dataSize = grayData.length;
+      var maxSize = 100000; // 限制最大10萬像素
+      
+      if (dataSize > maxSize) {
+        alert('圖片過大！當前: ' + dataSize + ' 像素，最大允許: ' + maxSize + ' 像素\n請縮小圖片尺寸或降低解析度');
+        progressDiv.style.display = 'none';
+        sendBtn.disabled = false;
+        sendBtn.textContent = '上傳圖片到 EPD';
+        return;
+      }
       
       var uploadData = {
         x: settings.x,
         y: settings.y,
-        w: settings.w,
-        h: settings.h,
+        width: settings.w,  // 改為 width 以匹配 Arduino 解析
+        height: settings.h, // 改為 height 以匹配 Arduino 解析
         contrast: settings.contrast,
         brightness: settings.brightness,
-        data: base64Data
+        grayLevels: 16,     // 固定使用16級灰階
+        inverted: false,    // 不反相
+        grayData: grayData,
+        filename: 'canvas_image',
+        filesize: dataSize
       };
+      
+      console.log('上傳數據大小:', dataSize, '像素, JSON大小:', JSON.stringify(uploadData).length, '字節');
+      
+      // 創建AbortController用於超時控制
+      var controller = new AbortController();
+      var timeoutId = setTimeout(function() {
+        controller.abort();
+      }, 60000); // 60秒超時
       
       // 使用fetch API上傳
       fetch('/upload-image', {
@@ -2751,9 +2814,16 @@ void handleRoot()
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(uploadData)
+        body: JSON.stringify(uploadData),
+        signal: controller.signal
       })
-      .then(response => response.text())
+      .then(response => {
+        clearTimeout(timeoutId); // 清除超時計時器
+        if (!response.ok) {
+          throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+        }
+        return response.text();
+      })
       .then(data => {
         progressBar.style.width = '100%';
         console.log('上傳成功:', data);
@@ -2761,15 +2831,28 @@ void handleRoot()
           progressDiv.style.display = 'none';
           sendBtn.disabled = false;
           sendBtn.textContent = '上傳圖片到 EPD';
-          alert('圖片上傳成功！EPD顯示更新完成');
+          alert('圖片上傳成功！EPD顯示更新完成\n' + data);
         }, 500);
       })
       .catch(error => {
+        clearTimeout(timeoutId); // 清除超時計時器
         console.error('上傳錯誤:', error);
         progressDiv.style.display = 'none';
         sendBtn.disabled = false;
         sendBtn.textContent = '上傳圖片到 EPD';
-        alert('上傳失敗: ' + error);
+        
+        var errorMsg = '上傳失敗: ';
+        if (error.name === 'AbortError') {
+          errorMsg += '請求超時（60秒）- 圖片可能太大或處理時間過長';
+        } else if (error.message.includes('Failed to fetch')) {
+          errorMsg += '網路連線失敗 - 請檢查WiFi連線';
+        } else if (error.message.includes('HTTP')) {
+          errorMsg += '伺服器錯誤 - ' + error.message;
+        } else {
+          errorMsg += error.message;
+        }
+        
+        alert(errorMsg);
       });
     }
     
@@ -2782,6 +2865,18 @@ void handleRoot()
   <!-- 智能圖片控制上傳系統 -->
   <div class="upload">
     <h3>🖼️ 智能圖片控制器</h3>
+    
+    <!-- 使用說明 -->
+    <div style="background: #e8f5e8; padding: 12px; border-radius: 6px; margin-bottom: 15px; border-left: 4px solid #4CAF50;">
+      <strong>📌 使用限制說明：</strong>
+      <ul style="margin: 8px 0; padding-left: 20px; font-size: 13px;">
+        <li><strong>最大像素數：</strong> 100,000 像素 (例如：316×316)</li>
+        <li><strong>處理時間：</strong> 最多60秒，大圖片需要更長時間</li>
+        <li><strong>建議尺寸：</strong> 小於300×300像素可獲得最佳性能</li>
+        <li><strong>格式支援：</strong> JPG、PNG、GIF、BMP等常見格式</li>
+        <li><strong>顯示效果：</strong> 16階灰階，黑白效果最佳</li>
+      </ul>
+    </div>
     
     <!-- 圖片選擇區 -->
     <div class="form-row">
@@ -4047,12 +4142,30 @@ void handleUploadImage()
   String jsonData = server.arg("plain");
   Serial.printf("[IMAGE] 接收到資料大小: %d bytes\n", jsonData.length());
 
+  // 檢查數據大小限制
+  if (jsonData.length() > 1000000) // 1MB 限制
+  {
+    debugLog("ERROR", "接收數據過大");
+    sendTextResponse(413, "數據過大，請縮小圖片");
+    return;
+  }
+
   // 解析圖片參數
   ImageParams params;
   if (!parseImageParams(jsonData, params))
   {
     debugLog("ERROR", "圖片參數解析失敗");
     sendTextResponse(400, "參數解析失敗");
+    return;
+  }
+
+  // 檢查圖片尺寸限制
+  if (params.width * params.height > 100000) // 最大10萬像素
+  {
+    debugLog("ERROR", "圖片像素過多");
+    String errorMsg = "圖片過大: " + String(params.width * params.height) + " 像素 > 100,000 限制";
+    freeImageParams(params);
+    sendTextResponse(413, errorMsg);
     return;
   }
 
@@ -4067,13 +4180,18 @@ void handleUploadImage()
   Serial.printf("[MEMORY] Image size: %d bytes, Free heap: %d, Free PSRAM: %d\n",
                 imageSize, freeHeap, freePsram);
 
-  if (freeHeap < 100000 || freePsram < imageSize * 2)
+  if (freeHeap < 50000 || freePsram < imageSize * 3) // 更嚴格的記憶體檢查
   {
     debugLog("ERROR", "記憶體不足，無法處理圖片");
+    String memError = "記憶體不足 - 需要: " + String(imageSize * 3) + " 可用: " + String(freePsram);
     freeImageParams(params);
-    sendTextResponse(500, "記憶體不足");
+    sendTextResponse(507, memError);
     return;
   }
+
+  // 設置處理超時
+  unsigned long maxProcessingTime = 30000; // 30秒最大處理時間
+  server.client().setTimeout(35000);       // 35秒客戶端超時
 
   // 渲染圖片到EPD
   if (renderImageToEPD(params))
@@ -4084,7 +4202,8 @@ void handleUploadImage()
 
     String response = "圖片上傳成功 - 位置:(" + String(params.x) + "," + String(params.y) +
                       ") 尺寸:" + String(params.width) + "x" + String(params.height) +
-                      " 處理時間:" + String(processingTime) + "ms";
+                      " 處理時間:" + String(processingTime) + "ms" +
+                      " 記憶體使用:" + String(imageSize) + "bytes";
     sendTextResponse(200, response);
   }
   else
