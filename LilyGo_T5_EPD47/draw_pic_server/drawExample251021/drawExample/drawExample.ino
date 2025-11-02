@@ -111,8 +111,8 @@ void memoryStatus()
 // 使用內建的 ASCII 點陣字體顯示文字
 
 // ===== WiFi AP 設定 =====
-const char *ssid = "EPD-Controller02"; // WiFi 熱點名稱
-const char *password = "12345678";     // WiFi 密碼（至少8碼）
+const char *ssid = "EPD-Controller"; // WiFi 熱點名稱
+const char *password = "12345678";   // WiFi 密碼（至少8碼）
 
 // ===== 網頁伺服器 =====
 WebServer server(80); // 建立 HTTP 伺服器，監聽埠 80
@@ -140,8 +140,27 @@ void sendHtmlResponse(int code, const String &html)
 uint8_t *framebuffer = NULL;                    // 影像緩衝區指標
 const int FB_SIZE = EPD_WIDTH * EPD_HEIGHT / 2; // 2 位元灰階緩衝區大小
 
+// ===== 智能圖片處理結構體 =====
+struct ImageParams
+{
+  int x, y, width, height; // 位置和尺寸
+  uint8_t *grayData;       // 灰階資料指標
+  size_t dataSize;         // 資料大小
+  float contrast;          // 對比度
+  int brightness;          // 亮度
+  int grayLevels;          // 灰階級數
+  bool inverted;           // 是否反相
+  String filename;         // 檔案名稱
+  size_t filesize;         // 檔案大小
+};
+
 // ===== 函數聲明 =====
 void drawLine(int x0, int y0, int x1, int y1, int color, int thickness);
+void handleUploadImage();                                           // 處理圖片上傳
+bool parseImageParams(const String &jsonData, ImageParams &params); // 解析圖片參數
+bool renderImageToEPD(const ImageParams &params);                   // 渲染圖片到EPD
+void freeImageParams(ImageParams &params);                          // 釋放圖片參數記憶體
+void logImageProcessing(const ImageParams &params);                 // 記錄圖片處理日誌
 
 // ===== 簡易 ASCII 字體 (5x7 點陣) =====
 // 基本的 ASCII 字符點陣數據
@@ -391,14 +410,90 @@ void handleRoot()
   <title>EPD Controller</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body { font-family: Arial; padding: 10px; }
-    button { margin:5px; padding:10px; font-size:16px; }
-    .upload, .text-control { margin-top:20px; padding:15px; border:1px solid #ccc; border-radius:5px; }
-    .form-row { margin:10px 0; }
-    label { display:inline-block; width:80px; }
-    input[type="text"], input[type="number"] { padding:5px; margin:5px; }
-    input[type="range"] { width:200px; }
-    .color-value { font-weight:bold; }
+    body { font-family: Arial; padding: 10px; background: #f5f5f5; }
+    button { margin:5px; padding:10px; font-size:16px; border: none; border-radius: 4px; cursor: pointer; }
+    button:hover { opacity: 0.8; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .upload, .text-control { margin-top:20px; padding:15px; border:1px solid #ccc; border-radius:8px; background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .form-row { margin:10px 0; display: flex; align-items: center; flex-wrap: wrap; }
+    label { display:inline-block; width:80px; font-weight: bold; margin-right: 10px; }
+    input[type="text"], input[type="number"] { padding:8px; margin:5px; border: 1px solid #ddd; border-radius: 4px; }
+    input[type="range"] { width:200px; margin: 0 10px; }
+    input[type="file"] { padding: 8px; border: 2px dashed #ccc; border-radius: 4px; width: 100%; }
+    input[type="file"]:hover { border-color: #4CAF50; }
+    .color-value { font-weight:bold; color: #2196F3; margin-left: 10px; }
+    
+    /* 智能圖片控制專用樣式 */
+    .upload h3 { color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 8px; }
+    .upload h4 { color: #666; margin: 20px 0 10px 0; }
+    #imagePreviewCanvas { 
+      max-width: 100%; 
+      height: auto; 
+      border: 2px solid #333; 
+      border-radius: 4px;
+      background: white;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+    #positionInfo { 
+      font-family: monospace; 
+      background: #f0f0f0; 
+      padding: 8px; 
+      border-radius: 4px; 
+      margin-top: 10px;
+      border-left: 4px solid #2196F3;
+    }
+    #uploadProgress {
+      background: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 15px;
+      margin-top: 15px;
+    }
+    #progressBar {
+      background: linear-gradient(90deg, #4CAF50 0%, #45a049 100%);
+      height: 24px;
+      border-radius: 12px;
+      transition: width 0.5s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    #progressBar::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(45deg, transparent 33%, rgba(255,255,255,.3) 33%, rgba(255,255,255,.3) 66%, transparent 66%);
+      animation: progressShine 2s infinite;
+    }
+    @keyframes progressShine {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+    small { color: #666; font-style: italic; margin-left: 10px; }
+    
+    /* 按鈕樣式增強 */
+    button[onclick*="fit"] { background: #2196F3; color: white; }
+    button[onclick*="keep"] { background: #FF9800; color: white; }
+    button[onclick*="center"] { background: #9C27B0; color: white; }
+    button[onclick*="invert"] { background: #607D8B; color: white; }
+    button[onclick*="reset"] { background: #795548; color: white; }
+    #sendImageBtn { 
+      background: linear-gradient(45deg, #4CAF50, #45a049); 
+      color: white; 
+      font-weight: bold;
+      border: none;
+      padding: 15px 30px;
+      font-size: 18px;
+      border-radius: 8px;
+      box-shadow: 0 4px 8px rgba(76, 175, 80, 0.3);
+      transition: all 0.3s ease;
+    }
+    #sendImageBtn:hover:not(:disabled) { 
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(76, 175, 80, 0.4);
+    }
     
     /* Canvas 手寫板樣式 */
     .canvas-container { 
@@ -1737,8 +1832,942 @@ void handleRoot()
         }, 300);
       }, 3000);
     }
+
+    // ===== 智能圖片控制系統 =====
+    let originalImageData = null;
+    let previewCanvas = null;
+    let previewCtx = null;
+    let currentImageFile = null;
+    
+    // 初始化圖片控制系統
+    function initImageControls() {
+      previewCanvas = document.getElementById('imagePreviewCanvas');
+      if (previewCanvas) {
+        previewCtx = previewCanvas.getContext('2d');
+        // 設定畫布大小比例 (EPD: 540x960)
+        previewCanvas.width = 270;  // 1:2 縮放預覽
+        previewCanvas.height = 480;
+      }
+    }
+    
+    // 圖片上傳預覽
+    function previewUploadedImage() {
+      const fileInput = document.getElementById('uploadImageFile');
+      const file = fileInput.files[0];
+      
+      if (!file) {
+        showToast('請選擇圖片檔案');
+        return;
+      }
+      
+      // 檢查檔案類型
+      if (!file.type.startsWith('image/')) {
+        showToast('請選擇有效的圖片檔案');
+        return;
+      }
+      
+      currentImageFile = file;
+      const reader = new FileReader();
+      
+      reader.onload = function(e) {
+        const img = new Image();
+        img.onload = function() {
+          originalImageData = {
+            image: img,
+            width: img.width,
+            height: img.height
+          };
+          
+          // 顯示圖片資訊
+          document.getElementById('imageInfo').textContent = 
+            `原始尺寸: ${img.width} × ${img.height} 像素`;
+          
+          // 自動設定合理的尺寸
+          const maxWidth = Math.min(img.width, 540);
+          const maxHeight = Math.min(img.height, 960);
+          const aspectRatio = img.width / img.height;
+          
+          let newWidth = maxWidth;
+          let newHeight = Math.round(newWidth / aspectRatio);
+          
+          if (newHeight > maxHeight) {
+            newHeight = maxHeight;
+            newWidth = Math.round(newHeight * aspectRatio);
+          }
+          
+          document.getElementById('imgX').value = Math.max(0, Math.floor((540 - newWidth) / 2));
+          document.getElementById('imgY').value = Math.max(0, Math.floor((960 - newHeight) / 2));
+          document.getElementById('imgWidth').value = newWidth;
+          document.getElementById('imgHeight').value = newHeight;
+          
+          // 顯示預覽區域
+          document.getElementById('imagePreview').style.display = 'block';
+          document.getElementById('sendImageBtn').disabled = false;
+          
+          // 顯示控制區域
+          showImageControls();
+          
+          updateImagePreview();
+          showToast('圖片載入成功！');
+        };
+        img.src = e.target.result;
+      };
+      
+      reader.onerror = function() {
+        showToast('圖片讀取失敗，請重新選擇');
+      };
+      
+      reader.readAsDataURL(file);
+    }
+    
+    // 更新圖片預覽
+    function updateImagePreview() {
+      if (!originalImageData || !previewCanvas) return;
+      
+      const x = parseInt(document.getElementById('imgX').value) || 0;
+      const y = parseInt(document.getElementById('imgY').value) || 0;
+      const width = parseInt(document.getElementById('imgWidth').value) || 100;
+      const height = parseInt(document.getElementById('imgHeight').value) || 100;
+      
+      // 清除畫布
+      previewCtx.fillStyle = 'white';
+      previewCtx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+      
+      // 繪製 EPD 邊界
+      previewCtx.strokeStyle = '#ccc';
+      previewCtx.lineWidth = 1;
+      previewCtx.strokeRect(0, 0, previewCanvas.width, previewCanvas.height);
+      
+      // 計算預覽縮放比例
+      const scaleX = previewCanvas.width / 540;
+      const scaleY = previewCanvas.height / 960;
+      
+      // 繪製圖片預覽
+      try {
+        previewCtx.drawImage(
+          originalImageData.image,
+          x * scaleX, y * scaleY,
+          width * scaleX, height * scaleY
+        );
+        
+        // 應用圖片效果
+        applyImageEffects();
+        
+        // 更新位置資訊
+        document.getElementById('positionInfo').textContent = 
+          `位置: (${x}, ${y}), 尺寸: ${width} × ${height}`;
+          
+      } catch (error) {
+        console.error('預覽更新失敗:', error);
+        showToast('預覽更新失敗');
+      }
+    }
+    
+    // 應用圖片效果
+    function applyImageEffects() {
+      if (!previewCanvas) return;
+      
+      const imageData = previewCtx.getImageData(0, 0, previewCanvas.width, previewCanvas.height);
+      const data = imageData.data;
+      
+      const contrast = parseFloat(document.getElementById('contrast').value) / 100;
+      const brightness = parseInt(document.getElementById('brightness').value);
+      const grayLevels = parseInt(document.getElementById('grayLevels').value);
+      
+      for (let i = 0; i < data.length; i += 4) {
+        // 轉換為灰階
+        let gray = data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114;
+        
+        // 調整亮度和對比度
+        gray = (gray - 128) * contrast + 128 + brightness;
+        gray = Math.max(0, Math.min(255, gray));
+        
+        // 量化到指定灰階級數
+        const level = Math.floor(gray / (256 / grayLevels));
+        gray = Math.round((level * 255) / (grayLevels - 1));
+        
+        data[i] = data[i+1] = data[i+2] = gray;
+      }
+      
+      previewCtx.putImageData(imageData, 0, 0);
+    }
+    
+    // ===== 階段2：參數控制和效果調整函數 =====
+    
+    // 輔助功能：適應螢幕
+    function fitToScreen() {
+      if (!originalImageData) {
+        showToast('請先選擇圖片');
+        return;
+      }
+      
+      document.getElementById('imgX').value = 0;
+      document.getElementById('imgY').value = 0;
+      document.getElementById('imgWidth').value = 540;
+      document.getElementById('imgHeight').value = 960;
+      updateImagePreview();
+      showToast('已調整為全螢幕顯示');
+    }
+    
+    // 輔助功能：保持寬高比例
+    function keepAspectRatio() {
+      if (!originalImageData) {
+        showToast('請先選擇圖片');
+        return;
+      }
+      
+      const targetWidth = parseInt(document.getElementById('imgWidth').value);
+      const aspectRatio = originalImageData.height / originalImageData.width;
+      const newHeight = Math.round(targetWidth * aspectRatio);
+      
+      if (newHeight <= 960) {
+        document.getElementById('imgHeight').value = newHeight;
+      } else {
+        // 如果高度超出，則基於高度計算寬度
+        const targetHeight = 960;
+        const newWidth = Math.round(targetHeight / aspectRatio);
+        document.getElementById('imgWidth').value = newWidth;
+        document.getElementById('imgHeight').value = targetHeight;
+      }
+      
+      updateImagePreview();
+      showToast('已調整為正確比例');
+    }
+    
+    // 輔助功能：圖片置中
+    function centerImage() {
+      const width = parseInt(document.getElementById('imgWidth').value);
+      const height = parseInt(document.getElementById('imgHeight').value);
+      
+      const centerX = Math.max(0, Math.floor((540 - width) / 2));
+      const centerY = Math.max(0, Math.floor((960 - height) / 2));
+      
+      document.getElementById('imgX').value = centerX;
+      document.getElementById('imgY').value = centerY;
+      updateImagePreview();
+      showToast('圖片已置中');
+    }
+    
+    // 效果控制：對比度更新
+    function updateContrast() {
+      const value = document.getElementById('contrast').value;
+      document.getElementById('contrastValue').textContent = value + '%';
+      updateImagePreview();
+    }
+    
+    // 效果控制：亮度更新
+    function updateBrightness() {
+      const value = document.getElementById('brightness').value;
+      document.getElementById('brightnessValue').textContent = value;
+      updateImagePreview();
+    }
+    
+    // 效果控制：灰階級數更新
+    function updateGrayLevels() {
+      const value = document.getElementById('grayLevels').value;
+      document.getElementById('grayLevelsValue').textContent = value + '級';
+      updateImagePreview();
+    }
+    
+    // 效果控制：顏色反相
+    function invertColors() {
+      if (!originalImageData) {
+        showToast('請先選擇圖片');
+        return;
+      }
+      
+      // 切換反相狀態
+      const isInverted = document.getElementById('contrast').dataset.inverted === 'true';
+      
+      if (!isInverted) {
+        // 設定反相效果
+        document.getElementById('contrast').value = 100;
+        document.getElementById('brightness').value = 0;
+        document.getElementById('contrast').dataset.inverted = 'true';
+        showToast('已套用反相效果');
+      } else {
+        // 取消反相效果
+        document.getElementById('contrast').dataset.inverted = 'false';
+        showToast('已取消反相效果');
+      }
+      
+      updateContrast();
+      updateBrightness();
+      updateImagePreview();
+    }
+    
+    // 效果控制：重置所有效果
+    function resetEffects() {
+      document.getElementById('contrast').value = 100;
+      document.getElementById('brightness').value = 0;
+      document.getElementById('grayLevels').value = 16;
+      document.getElementById('contrast').dataset.inverted = 'false';
+      
+      updateContrast();
+      updateBrightness();
+      updateGrayLevels();
+      updateImagePreview();
+      showToast('效果已重置');
+    }
+    
+    // 顯示控制區域
+    function showImageControls() {
+      document.getElementById('positionControls').style.display = 'block';
+      document.getElementById('effectControls').style.display = 'block';
+    }
+    
+    // 隱藏控制區域
+    function hideImageControls() {
+      document.getElementById('positionControls').style.display = 'none';
+      document.getElementById('effectControls').style.display = 'none';
+    }
+    
+    // 更新預覽函數（改進版）
+    function updateImagePreview() {
+      if (!originalImageData || !previewCanvas) return;
+      
+      // 顯示控制區域
+      showImageControls();
+      
+      const x = parseInt(document.getElementById('imgX').value) || 0;
+      const y = parseInt(document.getElementById('imgY').value) || 0;
+      const width = parseInt(document.getElementById('imgWidth').value) || 100;
+      const height = parseInt(document.getElementById('imgHeight').value) || 100;
+      
+      // 參數驗證
+      if (x + width > 540) {
+        document.getElementById('imgWidth').value = 540 - x;
+        showToast('寬度已自動調整以適應螢幕');
+        return;
+      }
+      
+      if (y + height > 960) {
+        document.getElementById('imgHeight').value = 960 - y;
+        showToast('高度已自動調整以適應螢幕');
+        return;
+      }
+      
+      // 清除畫布
+      previewCtx.fillStyle = 'white';
+      previewCtx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+      
+      // 繪製 EPD 邊界線
+      previewCtx.strokeStyle = '#ccc';
+      previewCtx.lineWidth = 1;
+      previewCtx.strokeRect(0, 0, previewCanvas.width, previewCanvas.height);
+      
+      // 計算預覽縮放比例
+      const scaleX = previewCanvas.width / 540;
+      const scaleY = previewCanvas.height / 960;
+      
+      // 繪製圖片預覽
+      try {
+        previewCtx.drawImage(
+          originalImageData.image,
+          x * scaleX, y * scaleY,
+          width * scaleX, height * scaleY
+        );
+        
+        // 應用圖片效果
+        applyImageEffects();
+        
+        // 繪製位置指示框
+        previewCtx.strokeStyle = '#ff4444';
+        previewCtx.lineWidth = 2;
+        previewCtx.strokeRect(
+          x * scaleX, y * scaleY,
+          width * scaleX, height * scaleY
+        );
+        
+        // 更新位置資訊
+        document.getElementById('positionInfo').textContent = 
+          `位置: (${x}, ${y}), 尺寸: ${width} × ${height} 像素`;
+          
+      } catch (error) {
+        console.error('預覽更新失敗:', error);
+        showToast('預覽更新失敗：' + error.message);
+      }
+    }
+    
+    // ===== 階段3：圖片資料準備和發送 =====
+    
+    // 發送圖片到EPD
+    async function sendImageToEPD() {
+      if (!originalImageData) {
+        showToast('請先選擇圖片');
+        return;
+      }
+      
+      const btn = document.getElementById('sendImageBtn');
+      const progress = document.getElementById('uploadProgress');
+      const progressBar = document.getElementById('progressBar');
+      const progressText = document.getElementById('progressText');
+      
+      btn.disabled = true;
+      progress.style.display = 'block';
+      progressBar.style.width = '0%';
+      progressText.textContent = '0%';
+      
+      try {
+        // 準備圖片資料
+        progressText.textContent = '正在處理圖片...';
+        progressBar.style.width = '10%';
+        
+        const imageData = await prepareImageData();
+        if (!imageData) {
+          throw new Error('圖片資料處理失敗');
+        }
+        
+        progressText.textContent = '正在傳輸資料...';
+        progressBar.style.width = '30%';
+        
+        // 發送到Arduino
+        const response = await fetch('/upload-image', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(imageData)
+        });
+        
+        progressBar.style.width = '80%';
+        progressText.textContent = '正在渲染到EPD...';
+        
+        if (response.ok) {
+          const result = await response.text();
+          progressBar.style.width = '100%';
+          progressText.textContent = '完成！';
+          showToast('圖片已成功發送到EPD！');
+          console.log('Server response:', result);
+        } else {
+          throw new Error(`伺服器錯誤: ${response.status}`);
+        }
+        
+      } catch (error) {
+        console.error('發送失敗:', error);
+        showToast('發送失敗: ' + error.message);
+        progressBar.style.width = '0%';
+        progressText.textContent = '發送失敗';
+      } finally {
+        setTimeout(() => {
+          btn.disabled = false;
+          progress.style.display = 'none';
+        }, 3000);
+      }
+    }
+    
+    // 準備圖片資料
+    async function prepareImageData() {
+      try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        const x = parseInt(document.getElementById('imgX').value) || 0;
+        const y = parseInt(document.getElementById('imgY').value) || 0;
+        const width = parseInt(document.getElementById('imgWidth').value) || 100;
+        const height = parseInt(document.getElementById('imgHeight').value) || 100;
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        // 繪製調整後的圖片
+        ctx.drawImage(originalImageData.image, 0, 0, width, height);
+        
+        // 獲取圖片資料並應用效果
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const data = imageData.data;
+        
+        const contrast = parseFloat(document.getElementById('contrast').value) / 100;
+        const brightness = parseInt(document.getElementById('brightness').value);
+        const grayLevels = parseInt(document.getElementById('grayLevels').value);
+        const isInverted = document.getElementById('contrast').dataset.inverted === 'true';
+        
+        const grayData = [];
+        
+        // 逐像素處理
+        for (let i = 0; i < data.length; i += 4) {
+          // 轉換為灰階
+          let gray = data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114;
+          
+          // 調整亮度和對比度
+          gray = (gray - 128) * contrast + 128 + brightness;
+          gray = Math.max(0, Math.min(255, gray));
+          
+          // 反相處理
+          if (isInverted) {
+            gray = 255 - gray;
+          }
+          
+          // 量化到指定灰階級數
+          const level = Math.floor(gray / (256 / grayLevels));
+          const finalGray = Math.round((level * 15) / (grayLevels - 1));
+          
+          grayData.push(Math.max(0, Math.min(15, finalGray)));
+        }
+        
+        return {
+          x: x,
+          y: y,
+          width: width,
+          height: height,
+          grayData: grayData,
+          contrast: contrast,
+          brightness: brightness,
+          grayLevels: grayLevels,
+          inverted: isInverted,
+          filename: currentImageFile ? currentImageFile.name : 'unknown',
+          filesize: currentImageFile ? currentImageFile.size : 0
+        };
+        
+      } catch (error) {
+        console.error('圖片資料準備失敗:', error);
+        return null;
+      }
+    }
+    
+    
+    // 智能圖片控制變數
+    var smartImageData = null;
+    var originalImage = null;
+    
+    // 初始化圖片控制
+    function initImageControls() {
+      console.log('初始化智能圖片控制系統');
+      updatePositionInfo();
+    }
+    
+    // 預覽上傳的圖片
+    function previewUploadedImage() {
+      console.log('開始處理上傳圖片');
+      var file = document.getElementById('uploadImageFile').files[0];
+      if (!file) return;
+      
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var img = new Image();
+        img.onload = function() {
+          originalImage = img;
+          console.log('圖片載入完成:', img.width + 'x' + img.height);
+          
+          // 自動設定尺寸
+          document.getElementById('imgWidth').value = Math.min(img.width, 540);
+          document.getElementById('imgHeight').value = Math.min(img.height, 960);
+          
+          // 顯示控制面板
+          document.getElementById('positionControls').style.display = 'block';
+          document.getElementById('effectControls').style.display = 'block';
+          document.getElementById('sendImageBtn').disabled = false;
+          
+          updatePositionInfo();
+          processImageForPreview();
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+    
+    // 處理圖片預覽
+    function processImageForPreview() {
+      if (!originalImage) return;
+      
+      var canvas = document.getElementById('imagePreviewCanvas');
+      var ctx = canvas.getContext('2d');
+      
+      var w = parseInt(document.getElementById('imgWidth').value);
+      var h = parseInt(document.getElementById('imgHeight').value);
+      
+      canvas.width = w;
+      canvas.height = h;
+      
+      // 繪製縮放後的圖片
+      ctx.drawImage(originalImage, 0, 0, w, h);
+      
+      // 取得圖片資料
+      smartImageData = ctx.getImageData(0, 0, w, h);
+      console.log('圖片處理完成:', w + 'x' + h);
+      
+      // 套用濃淡調整
+      applyImageAdjustments();
+    }
+    
+    // 套用圖片調整
+    function applyImageAdjustments() {
+      if (!smartImageData) return;
+      
+      var canvas = document.getElementById('imagePreviewCanvas');
+      var ctx = canvas.getContext('2d');
+      
+      var contrast = parseFloat(document.getElementById('contrast').value) / 100;
+      var brightness = parseFloat(document.getElementById('brightness').value);
+      
+      var imageData = ctx.createImageData(smartImageData.width, smartImageData.height);
+      var srcData = smartImageData.data;
+      var destData = imageData.data;
+      
+      for (var i = 0; i < srcData.length; i += 4) {
+        var gray = srcData[i] * 0.299 + srcData[i+1] * 0.587 + srcData[i+2] * 0.114;
+        
+        // 套用調整
+        gray = (gray - 128) * contrast + 128 + brightness;
+        gray = Math.max(0, Math.min(255, gray));
+        
+        // 轉換為16階灰階預覽
+        var gray16 = Math.floor(gray / 16);
+        gray16 = Math.max(0, Math.min(15, gray16));
+        var displayGray = gray16 * 17;
+        
+        destData[i] = destData[i+1] = destData[i+2] = displayGray;
+        destData[i+3] = 255;
+      }
+      
+      ctx.putImageData(imageData, 0, 0);
+    }
+    
+    // 更新位置資訊
+    function updatePositionInfo() {
+      var x = parseInt(document.getElementById('imgX').value) || 0;
+      var y = parseInt(document.getElementById('imgY').value) || 0;
+      var w = parseInt(document.getElementById('imgWidth').value) || 100;
+      var h = parseInt(document.getElementById('imgHeight').value) || 100;
+      
+      var info = '位置: (' + x + ', ' + y + ') 尺寸: ' + w + ' x ' + h + ' 像素';
+      if (x + w > 540 || y + h > 960) {
+        info += ' ⚠️ 超出螢幕範圍!';
+      }
+      
+      document.getElementById('positionInfo').textContent = info;
+      
+      if (originalImage) {
+        processImageForPreview();
+      }
+    }
+    
+    // 為HTML控件提供的函數別名
+    function updateImagePreview() {
+      updatePositionInfo();
+    }
+    
+    // 更新對比度顯示
+    function updateContrast() {
+      var contrast = document.getElementById('contrast').value;
+      document.getElementById('contrastValue').textContent = contrast + '%';
+      if (smartImageData) {
+        applyImageAdjustments();
+      }
+    }
+    
+    // 更新亮度顯示
+    function updateBrightness() {
+      var brightness = document.getElementById('brightness').value;
+      document.getElementById('brightnessValue').textContent = brightness;
+      if (smartImageData) {
+        applyImageAdjustments();
+      }
+    }
+    
+    // 更新灰階級數顯示
+    function updateGrayLevels() {
+      var levels = document.getElementById('grayLevels').value;
+      document.getElementById('grayLevelsValue').textContent = levels + '級';
+      if (smartImageData) {
+        applyImageAdjustments();
+      }
+    }
+    
+    // 反相顏色
+    function invertColors() {
+      var contrast = document.getElementById('contrast');
+      var brightness = document.getElementById('brightness');
+      
+      contrast.value = 200 - parseInt(contrast.value);
+      brightness.value = -parseInt(brightness.value);
+      
+      updateContrast();
+      updateBrightness();
+    }
+    
+    // 重置效果
+    function resetEffects() {
+      document.getElementById('contrast').value = 100;
+      document.getElementById('brightness').value = 0;
+      document.getElementById('grayLevels').value = 16;
+      
+      updateContrast();
+      updateBrightness();
+      updateGrayLevels();
+    }
+    
+    // 發送圖片到EPD (函數別名)
+    function sendImageToEPD() {
+      uploadImageToEPD();
+    }
+    
+    // 自動適應設定
+    function fitToScreen() {
+      if (!originalImage) {
+        alert('請先選擇圖片');
+        return;
+      }
+      
+      var scaleX = 540 / originalImage.width;
+      var scaleY = 960 / originalImage.height;
+      var scale = Math.min(scaleX, scaleY);
+      
+      document.getElementById('imgWidth').value = Math.floor(originalImage.width * scale);
+      document.getElementById('imgHeight').value = Math.floor(originalImage.height * scale);
+      updatePositionInfo();
+    }
+    
+    // 保持比例
+    function keepAspectRatio() {
+      if (!originalImage) return;
+      
+      var w = parseInt(document.getElementById('imgWidth').value);
+      var ratio = originalImage.height / originalImage.width;
+      
+      document.getElementById('imgHeight').value = Math.floor(w * ratio);
+      updatePositionInfo();
+    }
+    
+    // 置中
+    function centerImage() {
+      var w = parseInt(document.getElementById('imgWidth').value);
+      var h = parseInt(document.getElementById('imgHeight').value);
+      
+      document.getElementById('imgX').value = Math.floor((540 - w) / 2);
+      document.getElementById('imgY').value = Math.floor((960 - h) / 2);
+      updatePositionInfo();
+    }
+    
+    // 反相
+    function invertImage() {
+      var contrast = parseFloat(document.getElementById('imgContrast').value);
+      var brightness = parseFloat(document.getElementById('imgBrightness').value);
+      
+      document.getElementById('imgContrast').value = -contrast;
+      document.getElementById('imgBrightness').value = 255 - brightness;
+      
+      if (smartImageData) {
+        applyImageAdjustments();
+      }
+    }
+    
+    // 重設
+    function resetImageSettings() {
+      document.getElementById('imgX').value = 0;
+      document.getElementById('imgY').value = 0;
+      document.getElementById('contrast').value = 100;
+      document.getElementById('brightness').value = 0;
+      
+      if (originalImage) {
+        document.getElementById('imgWidth').value = Math.min(originalImage.width, 540);
+        document.getElementById('imgHeight').value = Math.min(originalImage.height, 960);
+        processImageForPreview();
+      }
+      
+      updatePositionInfo();
+    }
+    
+    // 上傳圖片到EPD
+    function uploadImageToEPD() {
+      if (!smartImageData) {
+        alert('請先選擇並處理圖片');
+        return;
+      }
+      
+      var settings = {
+        x: parseInt(document.getElementById('imgX').value),
+        y: parseInt(document.getElementById('imgY').value),
+        w: parseInt(document.getElementById('imgWidth').value),
+        h: parseInt(document.getElementById('imgHeight').value),
+        contrast: parseFloat(document.getElementById('contrast').value) / 100,
+        brightness: parseFloat(document.getElementById('brightness').value)
+      };
+      
+      console.log('準備上傳圖片:', settings);
+      
+      // 顯示進度條
+      var progressDiv = document.getElementById('uploadProgress');
+      var progressBar = document.getElementById('progressBar');
+      var sendBtn = document.getElementById('sendImageBtn');
+      
+      progressDiv.style.display = 'block';
+      progressBar.style.width = '10%';
+      sendBtn.disabled = true;
+      sendBtn.textContent = '處理中...';
+      
+      var canvas = document.createElement('canvas');
+      canvas.width = settings.w;
+      canvas.height = settings.h;
+      var ctx = canvas.getContext('2d');
+      
+      // 調整對比度和亮度
+      var imageData = ctx.createImageData(settings.w, settings.h);
+      var srcData = smartImageData.data;
+      var destData = imageData.data;
+      
+      progressBar.style.width = '30%';
+      
+      for (var i = 0; i < srcData.length; i += 4) {
+        var gray = srcData[i] * 0.299 + srcData[i+1] * 0.587 + srcData[i+2] * 0.114;
+        
+        // 套用亮度和對比度
+        gray = (gray - 128) * settings.contrast + 128 + settings.brightness;
+        gray = Math.max(0, Math.min(255, gray));
+        
+        // 轉換為4位元灰階 (0-15)
+        var gray4bit = Math.floor(gray / 17);
+        gray4bit = Math.max(0, Math.min(15, gray4bit));
+        
+        // 轉回8位元供顯示
+        var displayGray = gray4bit * 17;
+        
+        destData[i] = destData[i+1] = destData[i+2] = displayGray;
+        destData[i+3] = 255;
+      }
+      
+      ctx.putImageData(imageData, 0, 0);
+      progressBar.style.width = '60%';
+      
+      // 轉換為base64
+      var base64Data = canvas.toDataURL('image/png').split(',')[1];
+      progressBar.style.width = '80%';
+      
+      var uploadData = {
+        x: settings.x,
+        y: settings.y,
+        w: settings.w,
+        h: settings.h,
+        contrast: settings.contrast,
+        brightness: settings.brightness,
+        data: base64Data
+      };
+      
+      // 使用fetch API上傳
+      fetch('/upload-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(uploadData)
+      })
+      .then(response => response.text())
+      .then(data => {
+        progressBar.style.width = '100%';
+        console.log('上傳成功:', data);
+        setTimeout(function() {
+          progressDiv.style.display = 'none';
+          sendBtn.disabled = false;
+          sendBtn.textContent = '上傳圖片到 EPD';
+          alert('圖片上傳成功！EPD顯示更新完成');
+        }, 500);
+      })
+      .catch(error => {
+        console.error('上傳錯誤:', error);
+        progressDiv.style.display = 'none';
+        sendBtn.disabled = false;
+        sendBtn.textContent = '上傳圖片到 EPD';
+        alert('上傳失敗: ' + error);
+      });
+    }
+    
+    // 頁面載入完成初始化
+    document.addEventListener('DOMContentLoaded', function() {
+      initImageControls();
+    });
   </script>
   
+  <!-- 智能圖片控制上傳系統 -->
+  <div class="upload">
+    <h3>🖼️ 智能圖片控制器</h3>
+    
+    <!-- 圖片選擇區 -->
+    <div class="form-row">
+      <label>選擇圖片:</label>
+      <input type="file" id="uploadImageFile" accept="image/*" onchange="previewUploadedImage()">
+      <small>支援 JPG、PNG、GIF、BMP 等格式</small>
+    </div>
+    
+    <!-- 圖片資訊顯示 -->
+    <div id="imageInfo" style="margin: 10px 0; color: #666; font-size: 14px;">
+      尚未選擇圖片
+    </div>
+    
+    <!-- 圖片預覽區 -->
+    <div id="imagePreview" style="display:none;">
+      <h4>預覽效果</h4>
+      <div style="text-align: center; margin: 15px 0;">
+        <canvas id="imagePreviewCanvas" style="border: 2px solid #333; background: white;"></canvas>
+        <div id="positionInfo" style="margin-top: 10px; color: #666; font-size: 12px;">
+          位置資訊將在此顯示
+        </div>
+      </div>
+    </div>
+    
+    <!-- 位置和尺寸控制 -->
+    <div id="positionControls" style="display:none;">
+      <h4>📍 位置和尺寸控制</h4>
+      <div class="form-row">
+        <label>X座標:</label>
+        <input type="number" id="imgX" min="0" max="540" value="0" step="1" onchange="updateImagePreview()">
+        <label>Y座標:</label>
+        <input type="number" id="imgY" min="0" max="960" value="0" step="1" onchange="updateImagePreview()">
+      </div>
+      <div class="form-row">
+        <label>寬度:</label>
+        <input type="number" id="imgWidth" min="1" max="540" value="200" step="1" onchange="updateImagePreview()">
+        <label>高度:</label>
+        <input type="number" id="imgHeight" min="1" max="960" value="200" step="1" onchange="updateImagePreview()">
+      </div>
+      <div class="form-row">
+        <button onclick="fitToScreen()">📱 適應螢幕</button>
+        <button onclick="keepAspectRatio()">📐 保持比例</button>
+        <button onclick="centerImage()">🎯 置中</button>
+      </div>
+    </div>
+    
+    <!-- 效果控制 -->
+    <div id="effectControls" style="display:none;">
+      <h4>🎨 效果控制</h4>
+      <div class="form-row">
+        <label>對比度:</label>
+        <input type="range" id="contrast" min="0" max="200" value="100" step="5" oninput="updateContrast()">
+        <span class="color-value" id="contrastValue">100%</span>
+      </div>
+      <div class="form-row">
+        <label>亮度:</label>
+        <input type="range" id="brightness" min="-100" max="100" value="0" step="5" oninput="updateBrightness()">
+        <span class="color-value" id="brightnessValue">0</span>
+      </div>
+      <div class="form-row">
+        <label>灰階級數:</label>
+        <input type="range" id="grayLevels" min="2" max="16" value="16" step="1" oninput="updateGrayLevels()">
+        <span class="color-value" id="grayLevelsValue">16級</span>
+      </div>
+      <div class="form-row">
+        <button onclick="invertColors()">🔄 反相</button>
+        <button onclick="resetEffects()">↺ 重置效果</button>
+      </div>
+    </div>
+    
+    <!-- 發送控制 -->
+    <div class="form-row" style="margin-top: 20px;">
+      <button onclick="sendImageToEPD()" id="sendImageBtn" disabled style="background: #4CAF50; color: white; font-size: 16px; padding: 12px 24px;">
+        🚀 發送圖片到 EPD
+      </button>
+    </div>
+    
+    <!-- 進度顯示 -->
+    <div id="uploadProgress" style="display:none; margin-top: 15px;">
+      <div style="background: #f0f0f0; border-radius: 10px; padding: 10px;">
+        <div>處理進度：<span id="progressText">0%</span></div>
+        <div style="background: #ddd; border-radius: 5px; margin-top: 5px;">
+          <div id="progressBar" style="background: #4CAF50; height: 20px; border-radius: 5px; width: 0%; transition: width 0.3s;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>
 )rawliteral";
@@ -2894,6 +3923,334 @@ void handleGrayscaleData()
   server.send(200, "text/plain", response);
 }
 
+// ===== 智能圖片控制上傳處理函數 =====
+
+void handleUploadImage()
+{
+  debugLog("IMAGE", "開始處理智能圖片上傳");
+  String clientIP = server.client().remoteIP().toString();
+  Serial.printf("[IMAGE] Request from IP: %s\n", clientIP.c_str());
+  Serial.printf("[MEMORY] Free heap before processing: %d bytes\n", ESP.getFreeHeap());
+  Serial.printf("[MEMORY] Free PSRAM before processing: %d bytes\n", ESP.getFreePsram());
+
+  unsigned long startTime = millis();
+
+  if (!server.hasArg("plain"))
+  {
+    debugLog("ERROR", "沒有接收到圖片資料");
+    sendTextResponse(400, "沒有圖片資料");
+    return;
+  }
+
+  String jsonData = server.arg("plain");
+  Serial.printf("[IMAGE] 接收到資料大小: %d bytes\n", jsonData.length());
+
+  // 解析圖片參數
+  ImageParams params;
+  if (!parseImageParams(jsonData, params))
+  {
+    debugLog("ERROR", "圖片參數解析失敗");
+    sendTextResponse(400, "參數解析失敗");
+    return;
+  }
+
+  // 記錄圖片處理日誌
+  logImageProcessing(params);
+
+  // 記憶體檢查
+  size_t freeHeap = ESP.getFreeHeap();
+  size_t freePsram = ESP.getFreePsram();
+  size_t imageSize = params.dataSize;
+
+  Serial.printf("[MEMORY] Image size: %d bytes, Free heap: %d, Free PSRAM: %d\n",
+                imageSize, freeHeap, freePsram);
+
+  if (freeHeap < 100000 || freePsram < imageSize * 2)
+  {
+    debugLog("ERROR", "記憶體不足，無法處理圖片");
+    freeImageParams(params);
+    sendTextResponse(500, "記憶體不足");
+    return;
+  }
+
+  // 渲染圖片到EPD
+  if (renderImageToEPD(params))
+  {
+    unsigned long processingTime = millis() - startTime;
+    Serial.printf("[IMAGE] 圖片處理完成，耗時 %lu ms\n", processingTime);
+    debugLog("OK", "圖片已成功顯示到EPD");
+
+    String response = "圖片上傳成功 - 位置:(" + String(params.x) + "," + String(params.y) +
+                      ") 尺寸:" + String(params.width) + "x" + String(params.height) +
+                      " 處理時間:" + String(processingTime) + "ms";
+    sendTextResponse(200, response);
+  }
+  else
+  {
+    debugLog("ERROR", "圖片渲染失敗");
+    sendTextResponse(500, "圖片渲染失敗");
+  }
+
+  // 清理記憶體
+  freeImageParams(params);
+
+  Serial.printf("[MEMORY] Free heap after processing: %d bytes\n", ESP.getFreeHeap());
+  Serial.printf("[MEMORY] Free PSRAM after processing: %d bytes\n", ESP.getFreePsram());
+}
+
+// 解析圖片參數
+bool parseImageParams(const String &jsonData, ImageParams &params)
+{
+  debugLog("PARSE", "開始解析圖片參數");
+
+  // 簡單的JSON解析 (可考慮使用ArduinoJson庫以獲得更好的解析能力)
+  int xPos = jsonData.indexOf("\"x\":") + 4;
+  int xEnd = jsonData.indexOf(",", xPos);
+  if (xPos < 4 || xEnd < xPos)
+    return false;
+  params.x = jsonData.substring(xPos, xEnd).toInt();
+
+  int yPos = jsonData.indexOf("\"y\":") + 4;
+  int yEnd = jsonData.indexOf(",", yPos);
+  if (yPos < 4 || yEnd < yPos)
+    return false;
+  params.y = jsonData.substring(yPos, yEnd).toInt();
+
+  int wPos = jsonData.indexOf("\"width\":") + 8;
+  int wEnd = jsonData.indexOf(",", wPos);
+  if (wPos < 8 || wEnd < wPos)
+    return false;
+  params.width = jsonData.substring(wPos, wEnd).toInt();
+
+  int hPos = jsonData.indexOf("\"height\":") + 9;
+  int hEnd = jsonData.indexOf(",", hPos);
+  if (hPos < 9 || hEnd < hPos)
+    return false;
+  params.height = jsonData.substring(hPos, hEnd).toInt();
+
+  // 解析其他參數
+  int contrastPos = jsonData.indexOf("\"contrast\":") + 11;
+  int contrastEnd = jsonData.indexOf(",", contrastPos);
+  if (contrastPos >= 11 && contrastEnd > contrastPos)
+  {
+    params.contrast = jsonData.substring(contrastPos, contrastEnd).toFloat();
+  }
+  else
+  {
+    params.contrast = 1.0;
+  }
+
+  int brightnessPos = jsonData.indexOf("\"brightness\":") + 13;
+  int brightnessEnd = jsonData.indexOf(",", brightnessPos);
+  if (brightnessPos >= 13 && brightnessEnd > brightnessPos)
+  {
+    params.brightness = jsonData.substring(brightnessPos, brightnessEnd).toInt();
+  }
+  else
+  {
+    params.brightness = 0;
+  }
+
+  int grayLevelsPos = jsonData.indexOf("\"grayLevels\":") + 13;
+  int grayLevelsEnd = jsonData.indexOf(",", grayLevelsPos);
+  if (grayLevelsPos >= 13 && grayLevelsEnd > grayLevelsPos)
+  {
+    params.grayLevels = jsonData.substring(grayLevelsPos, grayLevelsEnd).toInt();
+  }
+  else
+  {
+    params.grayLevels = 16;
+  }
+
+  // 解析檔案名稱
+  int filenamePos = jsonData.indexOf("\"filename\":\"") + 12;
+  int filenameEnd = jsonData.indexOf("\"", filenamePos);
+  if (filenamePos >= 12 && filenameEnd > filenamePos)
+  {
+    params.filename = jsonData.substring(filenamePos, filenameEnd);
+  }
+  else
+  {
+    params.filename = "unknown";
+  }
+
+  // 參數驗證
+  if (params.x < 0 || params.y < 0 || params.width <= 0 || params.height <= 0)
+  {
+    debugLog("ERROR", "無效的位置或尺寸參數");
+    return false;
+  }
+
+  if (params.x + params.width > EPD_WIDTH || params.y + params.height > EPD_HEIGHT)
+  {
+    Serial.printf("[WARNING] 圖片超出顯示範圍: (%d,%d) %dx%d\n",
+                  params.x, params.y, params.width, params.height);
+    // 自動裁剪到合理範圍
+    params.width = min(params.width, EPD_WIDTH - params.x);
+    params.height = min(params.height, EPD_HEIGHT - params.y);
+    debugLog("WARNING", "圖片已自動裁剪至顯示範圍內");
+  }
+
+  // 解析灰階資料
+  int dataStart = jsonData.indexOf("\"grayData\":[") + 12;
+  int dataEnd = jsonData.indexOf("]", dataStart);
+
+  if (dataStart < 12 || dataEnd < dataStart)
+  {
+    debugLog("ERROR", "找不到灰階資料");
+    return false;
+  }
+
+  String dataStr = jsonData.substring(dataStart, dataEnd);
+  params.dataSize = params.width * params.height;
+
+  // 使用PSRAM分配記憶體
+  params.grayData = (uint8_t *)ps_malloc(params.dataSize);
+  if (!params.grayData)
+  {
+    debugLog("ERROR", "無法分配PSRAM記憶體給圖片資料");
+    return false;
+  }
+
+  // 解析逗號分隔的數值
+  int index = 0;
+  int pos = 0;
+
+  while (pos < dataStr.length() && index < params.dataSize)
+  {
+    int nextComma = dataStr.indexOf(',', pos);
+    if (nextComma == -1)
+      nextComma = dataStr.length();
+
+    String valueStr = dataStr.substring(pos, nextComma);
+    valueStr.trim();
+
+    if (valueStr.length() > 0)
+    {
+      int value = valueStr.toInt();
+      params.grayData[index] = constrain(value, 0, 15);
+      index++;
+    }
+
+    pos = nextComma + 1;
+  }
+
+  if (index != params.dataSize)
+  {
+    debugLog("ERROR", "灰階資料數量不匹配");
+    Serial.printf("[ERROR] Expected %d pixels, got %d\n", params.dataSize, index);
+    free(params.grayData);
+    return false;
+  }
+
+  Serial.printf("[PARSE] 解析完成: 位置(%d,%d) 尺寸%dx%d 資料%d像素\n",
+                params.x, params.y, params.width, params.height, index);
+  debugLog("OK", "圖片參數解析成功");
+
+  return true;
+}
+
+// 渲染圖片到EPD
+bool renderImageToEPD(const ImageParams &params)
+{
+  if (!framebuffer)
+  {
+    debugLog("ERROR", "Framebuffer 未初始化");
+    return false;
+  }
+
+  debugLog("DISPLAY", "開始渲染圖片到EPD");
+  Serial.printf("[DISPLAY] 渲染區域: (%d,%d) %dx%d\n",
+                params.x, params.y, params.width, params.height);
+
+  unsigned long renderStart = millis();
+
+  // 逐像素渲染到framebuffer
+  int pixelsProcessed = 0;
+  for (int y = 0; y < params.height; y++)
+  {
+    for (int x = 0; x < params.width; x++)
+    {
+      int srcIndex = y * params.width + x;
+      int dstX = params.x + x;
+      int dstY = params.y + y;
+
+      if (srcIndex < params.dataSize &&
+          dstX >= 0 && dstX < EPD_WIDTH &&
+          dstY >= 0 && dstY < EPD_HEIGHT)
+      {
+
+        uint8_t grayLevel = params.grayData[srcIndex];
+        epd_draw_pixel(dstX, dstY, grayLevel, framebuffer);
+        pixelsProcessed++;
+      }
+    }
+
+    // 每100行輸出一次進度（避免過多日誌）
+    if (y % 100 == 0 && y > 0)
+    {
+      Serial.printf("[RENDER] Progress: %d/%d rows\n", y, params.height);
+    }
+  }
+
+  unsigned long renderTime = millis() - renderStart;
+  Serial.printf("[RENDER] Framebuffer updated: %d pixels in %lu ms\n",
+                pixelsProcessed, renderTime);
+
+  // 更新EPD顯示
+  debugLog("DISPLAY", "更新EPD顯示");
+  unsigned long displayStart = millis();
+
+  // 定義更新區域
+  Rect_t updateArea = {
+      .x = params.x,
+      .y = params.y,
+      .width = params.width,
+      .height = params.height};
+
+  epd_poweron();
+
+  // 清除指定區域
+  epd_clear_area(updateArea);
+
+  // 繪製灰階圖像
+  epd_draw_grayscale_image(updateArea, framebuffer);
+
+  epd_poweroff();
+
+  unsigned long displayTime = millis() - displayStart;
+  Serial.printf("[DISPLAY] EPD update completed in %lu ms\n", displayTime);
+
+  debugLog("OK", "圖片渲染到EPD完成");
+  return true;
+}
+
+// 釋放圖片參數記憶體
+void freeImageParams(ImageParams &params)
+{
+  if (params.grayData)
+  {
+    free(params.grayData);
+    params.grayData = NULL;
+    debugLog("MEMORY", "圖片資料記憶體已釋放");
+  }
+}
+
+// 記錄圖片處理日誌
+void logImageProcessing(const ImageParams &params)
+{
+  Serial.println("[IMAGE] ===== 圖片處理資訊 =====");
+  Serial.printf("[IMAGE] 檔案名稱: %s\n", params.filename.c_str());
+  Serial.printf("[IMAGE] 位置: (%d, %d)\n", params.x, params.y);
+  Serial.printf("[IMAGE] 尺寸: %d × %d 像素\n", params.width, params.height);
+  Serial.printf("[IMAGE] 資料大小: %d bytes\n", params.dataSize);
+  Serial.printf("[IMAGE] 對比度: %.2f\n", params.contrast);
+  Serial.printf("[IMAGE] 亮度: %d\n", params.brightness);
+  Serial.printf("[IMAGE] 灰階級數: %d\n", params.grayLevels);
+  Serial.printf("[IMAGE] 反相: %s\n", params.inverted ? "是" : "否");
+  Serial.println("[IMAGE] ========================");
+}
+
 void notFound()
 {
   String uri = server.uri();
@@ -3032,8 +4389,11 @@ void setup()
   server.on("/upload", HTTP_POST, []()
             { server.send(200); }, handleUpload);
 
+  // 智能圖片控制上傳路由
+  server.on("/upload-image", HTTP_POST, handleUploadImage);
+
   server.onNotFound(notFound);
-  Serial.println("[OK] All routes configured");
+  Serial.println("[OK] All routes configured (包含智能圖片上傳)");
 
   // 設定 WebServer 的緩衝區大小以處理大型 POST 數據
   const char *headerKeys[] = {"Content-Length"};
