@@ -843,6 +843,9 @@ void handleRoot()
           <div class="size-input-group">
             <label>寬度:</label>
             <select id="widthSelect" class="size-select">
+              <option value="4">4</option>
+              <option value="8">8</option>
+              <option value="16">16</option>
               <option value="32">32</option>
               <option value="64">64</option>
               <option value="128">128</option>
@@ -861,6 +864,9 @@ void handleRoot()
           <div class="size-input-group">
             <label>高度:</label>
             <select id="heightSelect" class="size-select">
+              <option value="4">4</option>
+              <option value="8">8</option>
+              <option value="16">16</option>
               <option value="32">32</option>
               <option value="64">64</option>
               <option value="128">128</option>
@@ -876,6 +882,10 @@ void handleRoot()
         </div>
         
         <div class="preset-buttons">
+          <button class="preset-btn" onclick="setPresetSize(4, 4)">4×4</button>
+          <button class="preset-btn" onclick="setPresetSize(8, 8)">8×8</button>
+          <button class="preset-btn" onclick="setPresetSize(16, 16)">16×16</button>
+          <button class="preset-btn" onclick="setPresetSize(32, 32)">32×32</button>
           <button class="preset-btn" onclick="setPresetSize(64, 64)">64×64</button>
           <button class="preset-btn" onclick="setPresetSize(128, 128)">128×128</button>
           <button class="preset-btn" onclick="setPresetSize(320, 240)">320×240</button>
@@ -956,6 +966,38 @@ void handleRoot()
   
 
   <script>
+    // ===== DOM 安全訪問輔助函數 =====
+    function safeGetElement(id) {
+      const element = document.getElementById(id);
+      if (!element) {
+        console.warn('Element not found:', id);
+      }
+      return element;
+    }
+    
+    function safeGetValue(id, defaultValue = '') {
+      const element = safeGetElement(id);
+      return element ? element.value : defaultValue;
+    }
+    
+    function safeSetValue(id, value) {
+      const element = safeGetElement(id);
+      if (element) {
+        element.value = value;
+        return true;
+      }
+      return false;
+    }
+    
+    function safeSetText(id, text) {
+      const element = safeGetElement(id);
+      if (element) {
+        element.textContent = text;
+        return true;
+      }
+      return false;
+    }
+    
     // Canvas 繪圖變數
     let canvas = null;
     let ctx = null;
@@ -1084,14 +1126,14 @@ void handleRoot()
     }
     
     function updateBrushSize() {
-      currentBrushSize = document.getElementById('brushSize').value;
-      document.getElementById('brushSizeValue').textContent = currentBrushSize;
+      currentBrushSize = safeGetValue('brushSize');
+      safeSetText('brushSizeValue', currentBrushSize);
     }
     
     function updateBrushColor() {
-      currentBrushColor = document.getElementById('brushColor').value;
+      currentBrushColor = safeGetValue('brushColor');
       const colorName = getColorName(currentBrushColor);
-      document.getElementById('brushColorValue').textContent = currentBrushColor + ' (' + colorName + ')';
+      safeSetText('brushColorValue', currentBrushColor + ' (' + colorName + ')');
     }
     
     function sendCanvasToEPD() {
@@ -1258,8 +1300,9 @@ void handleRoot()
       });
     }
     function updateTextColorValue() {
-      const color = document.getElementById('textColor').value;
-      const colorNames = ['黑色', '深灰', '中灰', '淺灰', '白色'];
+      const color = safeGetValue('textColor');
+      if (!color) return;
+      
       let colorName;
       if (color == 0) colorName = '黑色';
       else if (color <= 3) colorName = '深灰';
@@ -1267,11 +1310,13 @@ void handleRoot()
       else if (color <= 11) colorName = '淺灰';
       else colorName = '白色';
       
-      document.getElementById('textColorValue').textContent = color + ' (' + colorName + ')';
+      safeSetText('textColorValue', color + ' (' + colorName + ')');
     }
     
     function updateBgColorValue() {
-      const color = document.getElementById('bgColor').value;
+      const color = safeGetValue('bgColor');
+      if (!color) return;
+      
       let colorName;
       if (color == 16) {
         colorName = '透明';
@@ -1284,57 +1329,65 @@ void handleRoot()
         colorName = color + ' (' + colorName + ')';
       }
       
-      document.getElementById('bgColorValue').textContent = colorName;
+      safeSetText('bgColorValue', colorName);
     }
     
     function updateFontSizeValue() {
-      const size = document.getElementById('fontSize').value;
-      document.getElementById('fontSizeValue').textContent = size + ' (像素倍數)';
+      const size = safeGetValue('fontSize');
+      safeSetText('fontSizeValue', size + ' (像素倍數)');
     }
     
     function updateLineColorValue() {
-      const color = document.getElementById('lineColor').value;
+      const color = safeGetValue('lineColor');
+      if (!color) return;
       const colorName = getColorName(color);
-      document.getElementById('lineColorValue').textContent = color + ' (' + colorName + ')';
+      safeSetText('lineColorValue', color + ' (' + colorName + ')');
     }
     
     function updateLineThicknessValue() {
-      const thickness = document.getElementById('lineThickness').value;
-      document.getElementById('lineThicknessValue').textContent = thickness + ' 像素';
+      const thickness = safeGetValue('lineThickness');
+      if (!thickness) return;
+      safeSetText('lineThicknessValue', thickness + ' 像素');
     }
     
     function updateCircleBorderColorValue() {
-      const color = document.getElementById('circleBorderColor').value;
+      const color = safeGetValue('circleBorderColor');
+      if (!color) return;
       const colorName = getColorName(color);
-      document.getElementById('circleBorderColorValue').textContent = color + ' (' + colorName + ')';
+      safeSetText('circleBorderColorValue', color + ' (' + colorName + ')');
     }
     
     function updateCircleBorderThicknessValue() {
-      const thickness = document.getElementById('circleBorderThickness').value;
-      document.getElementById('circleBorderThicknessValue').textContent = thickness + ' 像素';
+      const thickness = safeGetValue('circleBorderThickness');
+      if (!thickness) return;
+      safeSetText('circleBorderThicknessValue', thickness + ' 像素');
     }
     
     function updateCircleFillColorValue() {
-      const color = document.getElementById('circleFillColor').value;
+      const color = safeGetValue('circleFillColor');
+      if (!color) return;
       const colorName = getColorName(color);
-      document.getElementById('circleFillColorValue').textContent = color + ' (' + colorName + ')';
+      safeSetText('circleFillColorValue', color + ' (' + colorName + ')');
     }
     
     function updateRectBorderColorValue() {
-      const color = document.getElementById('rectBorderColor').value;
+      const color = safeGetValue('rectBorderColor');
+      if (!color) return;
       const colorName = getColorName(color);
-      document.getElementById('rectBorderColorValue').textContent = color + ' (' + colorName + ')';
+      safeSetText('rectBorderColorValue', color + ' (' + colorName + ')');
     }
     
     function updateRectBorderThicknessValue() {
-      const thickness = document.getElementById('rectBorderThickness').value;
-      document.getElementById('rectBorderThicknessValue').textContent = thickness + ' 像素';
+      const thickness = safeGetValue('rectBorderThickness');
+      if (!thickness) return;
+      safeSetText('rectBorderThicknessValue', thickness + ' 像素');
     }
     
     function updateRectFillColorValue() {
-      const color = document.getElementById('rectFillColor').value;
+      const color = safeGetValue('rectFillColor');
+      if (!color) return;
       const colorName = getColorName(color);
-      document.getElementById('rectFillColorValue').textContent = color + ' (' + colorName + ')';
+      safeSetText('rectFillColorValue', color + ' (' + colorName + ')');
     }
     
     function getColorName(color) {
@@ -1514,19 +1567,21 @@ void handleRoot()
     }
     
     // 初始化所有顯示值
-    updateTextColorValue();
-    updateBgColorValue();
-    updateFontSizeValue();
-    updateLineColorValue();
-    updateLineThicknessValue();
-    updateCircleBorderColorValue();
-    updateCircleBorderThicknessValue();
-    updateCircleFillColorValue();
-    updateRectBorderColorValue();
-    updateRectBorderThicknessValue();
-    updateRectFillColorValue();
-    updateBrushSize();
-    updateBrushColor();
+    function initializeValues() {
+      updateTextColorValue();
+      updateBgColorValue();
+      updateFontSizeValue();
+      updateLineColorValue();
+      updateLineThicknessValue();
+      updateCircleBorderColorValue();
+      updateCircleBorderThicknessValue();
+      updateCircleFillColorValue();
+      updateRectBorderColorValue();
+      updateRectBorderThicknessValue();
+      updateRectFillColorValue();
+      updateBrushSize();
+      updateBrushColor();
+    }
     
     // 灰階數據傳送函數
     function sendGrayscaleData() {
@@ -1601,8 +1656,12 @@ void handleRoot()
     
     // 初始化 Canvas
     window.onload = function() {
+      console.log('Window loaded, initializing...');
       initCanvas();
       initImageConverter();
+      initImageControls();
+      initializeValues();
+      console.log('All systems initialized');
     };
     
     // ===== 圖片轉換器功能 =====
@@ -1657,18 +1716,27 @@ void handleRoot()
       presetButtons.forEach(btn => btn.classList.remove('active'));
       
       // 檢查是否符合預設尺寸
-      if (currentWidth === 64 && currentHeight === 64) {
+
+      if (currentWidth === 4 && currentHeight === 4) {
         presetButtons[0].classList.add('active');
-      } else if (currentWidth === 128 && currentHeight === 128) {
+      } else if (currentWidth === 8 && currentHeight === 8) {
         presetButtons[1].classList.add('active');
-      } else if (currentWidth === 320 && currentHeight === 240) {
+      } else if (currentWidth === 16 && currentHeight === 16) {
         presetButtons[2].classList.add('active');
-      } else if (currentWidth === 480 && currentHeight === 800) {
+      } else if (currentWidth === 32 && currentHeight === 32) {
         presetButtons[3].classList.add('active');
-      } else if (currentWidth === 540 && currentHeight === 960) {
+      } else if (currentWidth === 64 && currentHeight === 64) {
         presetButtons[4].classList.add('active');
-      } else if (currentWidth === 800 && currentHeight === 600) {
+      } else if (currentWidth === 128 && currentHeight === 128) {
         presetButtons[5].classList.add('active');
+      } else if (currentWidth === 320 && currentHeight === 240) {
+        presetButtons[6].classList.add('active');
+      } else if (currentWidth === 480 && currentHeight === 800) {
+        presetButtons[7].classList.add('active');
+      } else if (currentWidth === 540 && currentHeight === 960) {
+        presetButtons[9].classList.add('active');
+      } else if (currentWidth === 800 && currentHeight === 600) {
+        presetButtons[10].classList.add('active');
       }
     }
     
@@ -2333,7 +2401,10 @@ void handleRoot()
     // 初始化圖片控制
     function initImageControls() {
       console.log('初始化智能圖片控制系統');
-      updatePositionInfo();
+      // 延遲執行，確保DOM元素已載入
+      setTimeout(function() {
+        updatePositionInfo();
+      }, 100);
     }
     
     // 預覽上傳的圖片
@@ -2371,10 +2442,27 @@ void handleRoot()
       if (!originalImage) return;
       
       var canvas = document.getElementById('imagePreviewCanvas');
-      var ctx = canvas.getContext('2d');
+      if (!canvas) {
+        console.log('Preview canvas not found');
+        return;
+      }
       
-      var w = parseInt(document.getElementById('imgWidth').value);
-      var h = parseInt(document.getElementById('imgHeight').value);
+      var ctx = canvas.getContext('2d');
+      if (!ctx) {
+        console.log('Canvas context not available');
+        return;
+      }
+      
+      var imgWidthEl = document.getElementById('imgWidth');
+      var imgHeightEl = document.getElementById('imgHeight');
+      
+      if (!imgWidthEl || !imgHeightEl) {
+        console.log('Image dimension inputs not found');
+        return;
+      }
+      
+      var w = parseInt(imgWidthEl.value);
+      var h = parseInt(imgHeightEl.value);
       
       canvas.width = w;
       canvas.height = h;
@@ -2425,17 +2513,31 @@ void handleRoot()
     
     // 更新位置資訊
     function updatePositionInfo() {
-      var x = parseInt(document.getElementById('imgX').value) || 0;
-      var y = parseInt(document.getElementById('imgY').value) || 0;
-      var w = parseInt(document.getElementById('imgWidth').value) || 100;
-      var h = parseInt(document.getElementById('imgHeight').value) || 100;
+      // 安全檢查DOM元素是否存在
+      var imgXEl = document.getElementById('imgX');
+      var imgYEl = document.getElementById('imgY');
+      var imgWidthEl = document.getElementById('imgWidth');
+      var imgHeightEl = document.getElementById('imgHeight');
+      var positionInfoEl = document.getElementById('positionInfo');
+      
+      if (!imgXEl || !imgYEl || !imgWidthEl || !imgHeightEl) {
+        console.log('Position input elements not found, skipping update');
+        return;
+      }
+      
+      var x = parseInt(imgXEl.value) || 0;
+      var y = parseInt(imgYEl.value) || 0;
+      var w = parseInt(imgWidthEl.value) || 100;
+      var h = parseInt(imgHeightEl.value) || 100;
       
       var info = '位置: (' + x + ', ' + y + ') 尺寸: ' + w + ' x ' + h + ' 像素';
       if (x + w > 540 || y + h > 960) {
         info += ' ⚠️ 超出螢幕範圍!';
       }
       
-      document.getElementById('positionInfo').textContent = info;
+      if (positionInfoEl) {
+        positionInfoEl.textContent = info;
+      }
       
       if (originalImage) {
         processImageForPreview();
